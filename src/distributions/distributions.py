@@ -7,7 +7,7 @@ from torch.distributions import (Distribution, Wishart, MultivariateNormal, Inde
                                  MixtureSameFamily, Dirichlet, constraints)
 from torch.distributions.utils import lazy_property
 from torch.types import _size
-from typing import Optional
+from typing import Optional, Callable
 
 
 class GaussianMixtureModel(MixtureSameFamily):
@@ -53,8 +53,41 @@ class GaussianMixtureModel(MixtureSameFamily):
                                                         precision_matrix=precision_matrix,
                                                         scale_tril=scale_tril),
                                      0))
+        self.weights = weights
+        self.loc = loc
+        self.covariance_matrix = covariance_matrix
+        self.precision_matrix = precision_matrix
+        self.scale_tril = scale_tril
         self.n_components = weights.shape[-1]
         self.state_size = loc.shape[-1]
+        if (covariance_matrix is not None) + (scale_tril is not None) + (
+                precision_matrix is not None
+        ) != 1:
+            raise ValueError(
+                "Exactly one of covariance_matrix or precision_matrix or scale_tril may be specified."
+            )
+
+        if scale_tril is not None:
+            if scale_tril.dim() < 2:
+                raise ValueError(
+                    "scale_tril matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "scale_tril"
+        elif covariance_matrix is not None:
+            if covariance_matrix.dim() < 2:
+                raise ValueError(
+                    "covariance_matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "covariance_matrix"
+        elif precision_matrix is not None:
+            if precision_matrix.dim() < 2:
+                raise ValueError(
+                    "precision_matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "precision_matrix"
 
     @lazy_property
     def weights(self):
@@ -85,6 +118,7 @@ class MetaPrior(Distribution):
     def __init__(self, prior: type[Distribution]):
         super().__init__()
         self.prior = prior
+        self.prior_size: Optional[int] = None
 
     def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
         """
@@ -211,6 +245,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             self.scale_precision_matrix = scale_precision_matrix
             self.scale_scale_tril = scale_scale_tril
         self.scale_eps = 1e-6 if scale_eps is None else scale_eps
+        self.prior_size = self.n_components * (1 + self.state_size + self.state_size ** 2)
 
     def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
         weights = Dirichlet(self.weights_concentration).sample(sample_shape)
@@ -228,7 +263,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         precision_matrix += self.scale_eps * torch.eye(self.state_size)
         match self.scale_parametrisation:
             case "covariance_matrix":
-                scale = torch.linalg.inv(precision_matrix)
+                scale = torch.linalg.inv(precision_matrix.to(torch.float64)).to(torch.float32)
             case "precision_matrix":
                 scale = precision_matrix
             case "scale_tril":
@@ -237,6 +272,45 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
                 raise AssertionError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
                                      '"scale_tril"')
         return torch.cat([weights, loc.flatten(start_dim=-2), scale.flatten(start_dim=-3)], dim=-1)
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate the logarithm of the probability density function evaluated at the input value.
+        Args:
+            value: Value to query probability density function.
+
+        Returns:
+            Log probability of value.
+
+        """
+        params_dict = self.decode_sample(value)
+
+        match self.scale_parametrisation:
+            case "covariance_matrix":
+                precision_matrix = torch.linalg.inv(params_dict[self.scale_parametrisation])
+            case "precision_matrix":
+                precision_matrix = params_dict[self.scale_parametrisation]
+            case "scale_tril":
+                covariance_matrix = torch.einsum("...ij, ...kj -> ...ik", params_dict[self.scale_parametrisation],
+                                                 params_dict[self.scale_parametrisation])
+                precision_matrix = torch.linalg.inv(covariance_matrix)
+            case _:
+                raise AssertionError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
+                                     '"scale_tril"')
+        loc = params_dict["loc"].reshape(value.shape[:-1] + (self.n_components, self.state_size))
+        precision_matrix = precision_matrix.reshape(value.shape[:-1] + (self.n_components, self.state_size,
+                                                                        self.state_size))
+        return (Dirichlet(self.weights_concentration).log_prob(params_dict["weights"]) +
+                Independent(MultivariateNormal(self.loc_loc,
+                                               covariance_matrix=self.loc_covariance_matrix,
+                                               precision_matrix=self.loc_precision_matrix,
+                                               scale_tril=self.loc_scale_tril
+                                               ), 1).log_prob(loc) +
+                Independent(Wishart(self.scale_df,
+                                    covariance_matrix=self.scale_covariance_matrix,
+                                    precision_matrix=self.scale_precision_matrix,
+                                    scale_tril=self.scale_scale_tril
+                                    ), 1).log_prob(precision_matrix))
 
     def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
         """
@@ -275,7 +349,6 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         loc = decoded_sample["loc"]
         scale = decoded_sample[self.scale_parametrisation]
         return torch.cat([weights, loc.flatten(start_dim=-2), scale.flatten(start_dim=-3)], dim=-1)
-
 
     @lazy_property
     def weights_concentration(self):
@@ -323,18 +396,244 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
 
 
 class ObservationModel(Distribution):
-    """
-    Abstract base class of observation models p(z|x).
-    """
+    has_rsample = True
+
+    def __init__(self):
+        """
+        Abstract base class of observation models p(z|x).
+        """
+        super().__init__()
+        self.distribution: Optional[Distribution] = None
+        self.n_observations: Optional[int] = None
+
+    def condition_(self, x: torch.Tensor):
+        """
+        Condition observation distribution on state
+        Args:
+            x: State to condition sample on. Can be batched or not.
+
+        """
+
+    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
+        return self.distribution.sample(sample_shape=sample_shape)
+
+
+class DirectGaussianObservationModel(ObservationModel):
+    arg_constraints = {
+        "covariance_matrix": constraints.positive_definite,
+        "precision_matrix": constraints.positive_definite,
+        "scale_tril": constraints.lower_cholesky,
+    }
+
+    def __init__(self, covariance_matrix: Optional[torch.Tensor] = None,
+                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
+        """
+        Observation model for direction observation of state subject to Gaussian noise
+
+        Example - no batching:
+            >>> x = torch.ones(2, dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
+            >>> dgom = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
+            >>> dgom.condition_(x)
+            >>> print(dgom.sample())
+
+        Example - batching:
+            >>> x = torch.ones((2, 2), dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32).broadcast_to(2, 2, 2)
+            >>> dgom = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
+            >>> dgom.condition_(x)
+            >>> print(dgom.sample())
+
+        Args:
+            covariance_matrix: Covariance matrix for Gaussian noise.
+            precision_matrix: Precision matrix for Gaussian noise.
+            scale_tril: Lower triangular scale parameter for Gaussian noise.
+
+        """
+        super().__init__()
+        if (covariance_matrix is not None) + (scale_tril is not None) + (
+                precision_matrix is not None
+        ) != 1:
+            raise ValueError(
+                "Exactly one of covariance_matrix or precision_matrix or scale_tril may be specified."
+            )
+
+        if scale_tril is not None:
+            if scale_tril.dim() < 2:
+                raise ValueError(
+                    "scale_tril matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "scale_tril"
+            self.n_observations = scale_tril.shape[-1]
+        elif covariance_matrix is not None:
+            if covariance_matrix.dim() < 2:
+                raise ValueError(
+                    "covariance_matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "covariance_matrix"
+            self.n_observations = covariance_matrix.shape[-1]
+        elif precision_matrix is not None:
+            if precision_matrix.dim() < 2:
+                raise ValueError(
+                    "precision_matrix must be at least two-dimensional, "
+                    "with optional leading batch dimensions"
+                )
+            self.scale_parametrisation = "precision_matrix"
+            self.n_observations = precision_matrix.shape[-1]
+
+        self.distribution: Optional[MultivariateNormal] = None
+        self.covariance_matrix = covariance_matrix
+        self.precision_matrix = precision_matrix
+        self.scale_tril = scale_tril
+
+    def condition_(self, x: torch.Tensor):
+        """
+        Condition observation distribution on state
+        Args:
+            x: State to condition sample on. Can be batched or not.
+
+        """
+        self.distribution = MultivariateNormal(loc=x, covariance_matrix=self.covariance_matrix,
+                                               precision_matrix=self.precision_matrix, scale_tril=self.scale_tril)
+
+    @lazy_property
+    def covariance_matrix(self):
+        return self.covariance_matrix
+
+    @lazy_property
+    def precision_matrix(self):
+        return self.precision_matrix
+
+    @lazy_property
+    def scale_tril(self):
+        return self.scale_tril
+
+
+class MappedGaussianObservationModel(DirectGaussianObservationModel):
+    arg_constraints = {
+        "covariance_matrix": constraints.positive_definite,
+        "precision_matrix": constraints.positive_definite,
+        "scale_tril": constraints.lower_cholesky,
+    }
+
+    def __init__(self, covariance_matrix: Optional[torch.Tensor] = None,
+                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None,
+                 mapping: Optional[Callable[[torch.Tensor], torch.Tensor]] = None):
+        """
+        Observation model for observation of mapping of state subject to Gaussian noise
+
+        Example - no batching:
+            >>> x = torch.ones(2, dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
+            >>> mapping = lambda x: x ** 2
+            >>> mgom = MappedGaussianObservationModel(covariance_matrix=covariance_matrix, mapping=mapping)
+            >>> mgom.condition_(x)
+            >>> print(mgom.sample())
+
+        Example - batching:
+            >>> x = torch.ones((2, 2), dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32).broadcast_to(2, 2, 2)
+            >>> mapping = lambda x: x ** 3
+            >>> mgom = MappedGaussianObservationModel(covariance_matrix=covariance_matrix, mapping=mapping)
+            >>> mgom.condition_(x)
+            >>> print(mgom.sample())
+
+        Args:
+            covariance_matrix: Covariance matrix for Gaussian noise.
+            precision_matrix: Precision matrix for Gaussian noise.
+            scale_tril: Lower triangular scale parameter for Gaussian noise.
+            mapping: Mapping from state to observation.
+                Defaults to identity.
+
+        """
+        super().__init__(covariance_matrix, precision_matrix, scale_tril)
+        self.mapping = torch.nn.Identity() if mapping is None else mapping
+
+    def condition_(self, x: torch.Tensor):
+        super().condition_(self.mapping(x))
+
+
+class LinearGaussianObservationModel(MappedGaussianObservationModel):
+    arg_constraints = {
+        "covariance_matrix": constraints.positive_definite,
+        "precision_matrix": constraints.positive_definite,
+        "scale_tril": constraints.lower_cholesky,
+    }
+
+    def __init__(self, observation_matrix: torch.Tensor = None, covariance_matrix: Optional[torch.Tensor] = None,
+                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
+        """
+        Observation model for observation of mapping of state subject to Gaussian noise
+
+        Example - no batching:
+            >>> x = torch.ones(2, dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(3, dtype=torch.float32)
+            >>> observation_matrix = torch.ones((3, 2), dtype=torch.float32)
+            >>> mgom = LinearGaussianObservationModel(observation_matrix, covariance_matrix=covariance_matrix)
+            >>> mgom.condition_(x)
+            >>> print(mgom.sample())
+
+        Example - batching:
+            >>> x = torch.ones((2, 2), dtype=torch.float32)
+            >>> covariance_matrix = torch.eye(3, dtype=torch.float32).broadcast_to(2, 3, 3)
+            >>> observation_matrix = torch.ones((3, 2), dtype=torch.float32)
+            >>> mgom = LinearGaussianObservationModel(observation_matrix, covariance_matrix=covariance_matrix)
+            >>> mgom.condition_(x)
+            >>> print(mgom.sample())
+
+        Args:
+            observation_matrix: Matrix mapping from state to observation
+            covariance_matrix: Covariance matrix for Gaussian noise.
+            precision_matrix: Precision matrix for Gaussian noise.
+            scale_tril: Lower triangular scale parameter for Gaussian noise.
+
+        """
+        if covariance_matrix is not None:
+            n_obs = covariance_matrix.shape[-1]
+        elif precision_matrix is not None:
+            n_obs = precision_matrix.shape[-1]
+        elif scale_tril is not None:
+            n_obs = scale_tril.shape[-1]
+        else:
+            raise ValueError(
+                "Exactly one of covariance_matrix or precision_matrix or scale_tril may be specified."
+            )
+
+        assert observation_matrix.dim() == 2, \
+            "Observation matrix must be exactly 2 dimensional, batching is not supported"
+        assert observation_matrix.shape[-2] == n_obs
+        self.observation_matrix = observation_matrix
+        mapping = lambda x: torch.einsum("ij,...j->...i", self.observation_matrix, x)
+        super().__init__(covariance_matrix=covariance_matrix,
+                         precision_matrix=precision_matrix,
+                         scale_tril=scale_tril,
+                         mapping=mapping)
 
 
 class CompleteDistribution(Distribution):
     has_rsample = True
+    _validate_args = False
 
     def __init__(self, meta_prior: MetaPrior, observation_model: ObservationModel):
         """
         Complete distribution over prior, state and observation, p(phi, x, z). We implicitly decompose this
         hierarchically as p(phi) p(x|phi) p(z|x).
+
+        Example - no batching:
+            >>> meta_prior = GaussianMixtureModelConjugateMetaPrior(n_components=4, state_size=2)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
+            >>> observation_model = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
+            >>> complete_distribution = CompleteDistribution(meta_prior, observation_model)
+            >>> print(complete_distribution.sample())
+
+        Example - batching:
+            >>> meta_prior = GaussianMixtureModelConjugateMetaPrior(n_components=4, state_size=2)
+            >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
+            >>> observation_model = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
+            >>> complete_distribution = CompleteDistribution(meta_prior, observation_model)
+            >>> print(complete_distribution.sample((5, 10)))
 
         Args:
             meta_prior: Meta-prior distribution, p(phi)
@@ -349,5 +648,40 @@ class CompleteDistribution(Distribution):
         phi = self.meta_prior.sample(sample_shape)
         phi_decoded = self.meta_prior.decode_sample(phi)
         x = self.prior(**phi_decoded).sample()
-        z = self.observation_model
-        return torch.cat([phi, x, z])
+        self.observation_model.condition_(x)
+        z = self.observation_model.sample()
+        return torch.cat([phi, x, z], dim=-1)
+
+    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
+        """
+        Decode tensor of sampled parameters to dictionary of tensors keyed on prior parameters phi, state x and
+        observations z.
+
+        Args:
+            sample: Sampled tensor
+
+        Returns:
+            Decoded sample
+        """
+        phi = sample[..., :self.meta_prior.prior_size]
+        x = sample[..., self.meta_prior.prior_size:-self.observation_model.n_observations]
+        z = sample[..., -self.observation_model.n_observations:]
+        return {"phi": phi,
+                "x": x,
+                "z": z}
+
+    @staticmethod
+    def encode_sample(decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample
+
+        Args:
+            decoded_sample:  Dictionary of decoded sample
+
+        Returns:
+            Tensor encoding sample
+        """
+        phi = decoded_sample["phi"]
+        x = decoded_sample["x"]
+        z = decoded_sample["z"]
+        return torch.cat([phi, x, z], dim=-1)

@@ -2,8 +2,10 @@ import pytest
 import torch
 from torch.types import _size
 
-from distributions import (GaussianMixtureModel, GaussianMixtureModelConjugateMetaPrior, DirectGaussianObservationModel,
-                           MappedGaussianObservationModel, CompleteDistribution, ObservationModel, MetaPrior)
+from distributions.distributions import (GaussianMixtureModel, GaussianMixtureModelConjugateMetaPrior,
+                                         DirectGaussianObservationModel, MappedGaussianObservationModel,
+                                         LinearGaussianObservationModel, CompleteDistribution, ObservationModel,
+                                         MetaPrior)
 
 
 @pytest.mark.parametrize(
@@ -192,7 +194,7 @@ class TestDirectGaussianObservationModel:
     )
     def test_condition(self, x: torch.Tensor, scale: torch.Tensor, scale_parametrisation: str):
         dgom = DirectGaussianObservationModel(**{scale_parametrisation: scale})
-        dgom.condition(x)
+        dgom.condition_(x)
         assert torch.equal(dgom.distribution.loc, x)
 
     @pytest.mark.parametrize(
@@ -225,7 +227,7 @@ class TestDirectGaussianObservationModel:
                     expected_shape: _size):
         dgom = DirectGaussianObservationModel(**{scale_parametrisation: scale})
         assert dgom.n_observations == x.shape[-1]
-        dgom.condition(x)
+        dgom.condition_(x)
         sample = dgom.sample(sample_shape)
         assert sample.shape == expected_shape
 
@@ -257,7 +259,7 @@ class TestMappedGaussianObservationModel:
     )
     def test_condition(self, x: torch.Tensor, scale: torch.Tensor, scale_parametrisation: str, mapping: callable):
         dgom = MappedGaussianObservationModel(**{scale_parametrisation: scale}, mapping=mapping)
-        dgom.condition(x)
+        dgom.condition_(x)
         assert torch.equal(dgom.distribution.loc, x)
 
     @pytest.mark.parametrize(
@@ -293,7 +295,76 @@ class TestMappedGaussianObservationModel:
                     sample_shape: _size, expected_shape: _size):
         mgom = MappedGaussianObservationModel(**{scale_parametrisation: scale}, mapping=mapping)
         assert mgom.n_observations == x.shape[-1]
-        mgom.condition(x)
+        mgom.condition_(x)
+        sample = mgom.sample(sample_shape)
+        assert sample.shape == expected_shape
+
+
+class TestLinearGaussianObservationModel:
+
+    @pytest.mark.parametrize(
+        ("x", "scale", "scale_parametrisation", "observation_matrix"),
+        [
+            (
+                torch.ones(2),
+                torch.eye(2),
+                "covariance_matrix",
+                torch.eye(2)
+            ),
+            (
+                torch.ones((5, 2)),
+                torch.eye(2),
+                "precision_matrix",
+                torch.eye(2)
+            ),
+            (
+                torch.ones((5, 4, 2)),
+                torch.eye(2).broadcast_to(5, 4, 2, 2),
+                "scale_tril",
+                torch.eye(2)
+            )
+        ]
+    )
+    def test_condition(self, x: torch.Tensor, scale: torch.Tensor, scale_parametrisation: str,
+                       observation_matrix: torch.Tensor):
+        dgom = LinearGaussianObservationModel(**{scale_parametrisation: scale}, observation_matrix=observation_matrix)
+        dgom.condition_(x)
+        assert torch.equal(dgom.distribution.loc, x)
+
+    @pytest.mark.parametrize(
+        ("x", "scale", "scale_parametrisation", "observation_matrix", "sample_shape", "expected_shape"),
+        [
+            (
+                torch.ones(2),
+                torch.eye(3),
+                "covariance_matrix",
+                torch.ones((3, 2)),
+                (1,),
+                (1., 3.)
+            ),
+            (
+                torch.ones((5, 2)),
+                torch.eye(2),
+                "precision_matrix",
+                torch.eye(2),
+                (10, 20),
+                (10, 20, 5, 2)
+            ),
+            (
+                torch.ones((5, 4, 2)),
+                torch.eye(2).broadcast_to(5, 4, 2, 2),
+                "scale_tril",
+                torch.eye(2),
+                torch.Size(),
+                (5, 4, 2)
+            )
+        ]
+    )
+    def test_sample(self, x: torch.Tensor, scale: torch.Tensor, scale_parametrisation: str,
+                    observation_matrix: torch.Tensor, sample_shape: _size, expected_shape: _size):
+        mgom = LinearGaussianObservationModel(**{scale_parametrisation: scale}, observation_matrix=observation_matrix)
+        assert mgom.n_observations == observation_matrix.shape[-2]
+        mgom.condition_(x)
         sample = mgom.sample(sample_shape)
         assert sample.shape == expected_shape
 

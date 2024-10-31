@@ -10,9 +10,9 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LRScheduler
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from transformers import TransformerModel
-from distributions import CompleteDistribution
-from utils import get_openai_lr, get_cosine_schedule_with_warmup, torch_nanmean
+from model.transformers import TransformerModel
+from distributions.distributions import CompleteDistribution
+from model.utils import get_openai_lr, get_cosine_schedule_with_warmup, torch_nanmean
 
 
 def train(model: TransformerModel, complete_distribution: CompleteDistribution, epochs: int = 100,
@@ -66,7 +66,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_epochs, epochs - warmup_epochs)\
         if scheduler is None else scheduler(optimizer)
 
-    def train_epoch():
+    def train_epoch(mean_prior_loss: float = None):
         model.train()
         total_loss = 0.
         total_prior_loss = 0.
@@ -90,11 +90,13 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             phi_out_decoded = complete_distribution.meta_prior.decode_sample(phi_out)
             losses = -complete_distribution.meta_prior.prior(**phi_out_decoded).log_prob(targets)
             loss, nan_share = torch_nanmean(losses, return_nanshare=True)
-            with torch.no_grad():
-                prior_losses = -complete_distribution.meta_prior.prior(**complete_distribution.meta_prior.decode_sample(
-                    full_data_decoded["phi"].to(device)
-                )).log_prob(targets)
-                prior_loss = torch_nanmean(prior_losses, return_nanshare=False)
+            if compute_prior_loss and mean_prior_loss is None:
+                with torch.no_grad():
+                    prior_losses = -complete_distribution.meta_prior.prior(**complete_distribution.meta_prior.decode_sample(
+                        full_data_decoded["phi"].to(device)
+                    )).log_prob(targets)
+                    prior_loss = torch_nanmean(prior_losses, return_nanshare=False)
+                    total_prior_loss += prior_loss.cpu().item()
             nan_steps += nan_share.cpu().item()
             optimizer.zero_grad()
             loss.backward()
@@ -102,14 +104,15 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             step_time = time.time() - before_forward
 
             total_loss += loss.cpu().item()
-            total_prior_loss += prior_loss.cpu().item()
             total_forward_time += forward_time
             total_step_time += step_time
 
             if tqdm_iter:
                 postfix_dict = {'step time': step_time, 'mean loss': total_loss / (batch + 1)}
                 if compute_prior_loss:
-                    postfix_dict.update({'mean prior loss': total_prior_loss / (batch + 1)})
+                    if mean_prior_loss is None:
+                        mean_prior_loss = total_prior_loss / (batch + 1)
+                    postfix_dict.update({'mean prior loss': mean_prior_loss})
                 tqdm_iter.set_postfix(postfix_dict)
 
         return {
@@ -120,13 +123,14 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             "mean_forward_time": total_forward_time / steps_per_epoch,
             "mean_step_time": total_step_time / steps_per_epoch,
             "nan_share": nan_steps / steps_per_epoch,
-        }
+        }, mean_prior_loss
 
+    mean_prior_loss = None
     for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
         epoch_start_time = time.time()
         try:
             with sdpa_kernel(SDPBackend.MATH):
-                epoch_metrics = train_epoch()
+                epoch_metrics, mean_prior_loss = train_epoch(mean_prior_loss)
         except Exception as e:
             print("Invalid epoch encountered, skipping...")
             raise e
@@ -135,7 +139,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             print('\n' + '-' * (161 + 26 * compute_prior_loss))
             print(
                 f'| end of epoch {epoch:3d} | time: {(time.time() - epoch_start_time):5.2f}s '
-                f'| nan share {epoch_metrics["nan_share"]:5.2f} | lr {scheduler.get_last_lr()[0]:5.4f} '
+                f'| nan share {epoch_metrics["nan_share"]:5.2f} | lr {scheduler.get_last_lr()[0]:5.6f} '
                 f'| data time {epoch_metrics["epoch_load_time"]:5.2f} | epoch time {epoch_metrics["epoch_time"]:5.2f} '
                 f'| step time {epoch_metrics["mean_step_time"]:5.2f} '
                 f'| forward time {epoch_metrics["mean_forward_time"]:5.5f} '

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from components import Cholesky, PositiveDefinite
+from model.components import Cholesky, PositiveDefinite
 
 
 class TestCholesky:

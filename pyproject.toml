@@ -23,7 +23,7 @@ dev = [
 
 
 [project.urls]
-Homepage = "https://github.com/gwhittle110/variationaltransformers"
+Homepage = "https://github.com/GWhittle110/variational-transformers"
 
 
 [tools.pytest.ini.options]
