@@ -52,7 +52,7 @@ class Cholesky(nn.Module):
             tril = torch.tril(x, -1)
         else:
             raise ValueError("Cannot cast input as lower triangular matrix")
-        diag = torch.abs(diag)
+        diag = torch.exp(diag)
         diag = diag + self.jitter
         tril_complete = tril + torch.diag_embed(diag, dim1=-2, dim2=-1)
         return tril_complete.reshape(shape[:-1] + (-1,))
@@ -92,3 +92,24 @@ class PositiveDefinite(Cholesky):
             chol_mat = chol.reshape(shape[:-1] + (self.state_size, self.state_size))
         mat = torch.einsum("...ij, ...kj -> ...ik", chol_mat, chol_mat)
         return mat.reshape(chol.shape)
+
+
+class Logit(nn.Module):
+    """
+    Convert from weight space (0, 1) to logit space R.
+    """
+
+    @staticmethod
+    def forward(x: torch.Tensor) -> torch.Tensor:
+        """
+        Convert from weight space (0, 1) to logit space R.
+
+        Args:
+            x: Input tensor in (0, 1).
+
+        Returns:
+            Logit representation of x.
+
+        """
+        assert (x > 0).all() and (x < 1).all(), "Input must be in (0, 1)"
+        return torch.log(x / (1 - x))

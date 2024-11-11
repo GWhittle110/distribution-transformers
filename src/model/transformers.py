@@ -8,7 +8,8 @@ import torch.nn.functional as F
 
 from typing import Union, Callable
 
-from model.components import Cholesky, PositiveDefinite
+from model.components import Cholesky, PositiveDefinite, Logit
+from model.distribution_embeddings import GaussianEmbedding
 
 
 class TransformerModel(nn.Module):
@@ -80,7 +81,7 @@ class GMMTransformerModel(TransformerModel):
                                      '"scale_tril"')
         self.init_weights()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
         x = self.feedforward_in(x)
         x = x.reshape(shape[:-1] + (self.nhead, self.d_model))
@@ -140,13 +141,12 @@ class GMMConditionalTransformerModel(TransformerModel):
         self.scale_parametrisation = "covariance_matrix" if scale_parametrisation is None else scale_parametrisation
         self.d_model = d_model
         self.nhead = n_head
+        self.weight_transform = Logit()
         dim_feedforward = 4 * d_model if dim_feedforward is None else dim_feedforward
 
-        self.gaussian_embedding = nn.Sequential(nn.Linear(self.parameters_per_component, d_model // 2),
-                                                nn.GELU(),
-                                                nn.Linear(d_model // 2, d_model),
-                                                nn.GELU(),
-                                                nn.Linear(d_model, d_model))
+        self.gaussian_embedding = GaussianEmbedding(state_size=state_size,
+                                                    d_model=d_model,
+                                                    hidden_layer_sizes=[d_model // 2, d_model])
         self.observation_embedding = nn.Sequential(nn.Linear(self.n_observations, d_model // 2),
                                                    nn.GELU(),
                                                    nn.Linear(d_model // 2, d_model),
@@ -157,12 +157,6 @@ class GMMConditionalTransformerModel(TransformerModel):
                                                                dropout=dropout, activation=activation,
                                                                batch_first=True, **kwargs)
         self.transformer_decoder = nn.TransformerDecoder(transformer_decoder_layer, num_decoder_layers)
-
-        self.feedforward_out = nn.Sequential(nn.Linear(d_model, d_model),
-                                             nn.GELU(),
-                                             nn.Linear(d_model, d_model // 2),
-                                             nn.GELU(),
-                                             nn.Linear(d_model // 2, self.parameters_per_component))
 
         match self.scale_parametrisation:
             case "covariance_matrix":
@@ -176,9 +170,9 @@ class GMMConditionalTransformerModel(TransformerModel):
                                      '"scale_tril"')
         self.init_weights()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_shape = x.shape[:-1]
-        phi_in_w = torch.log(x[..., :self.n_components])    # Move to logit space
+        phi_in_w = self.weight_transform(x[..., :self.n_components])    # Move to logit space
         phi_in_w = phi_in_w.reshape(batch_shape + (self.n_components, 1))
         phi_in_mu = x[..., self.n_components:self.n_components + self.state_size * self.n_components]
         phi_in_mu = phi_in_mu.reshape(batch_shape + (self.n_components, self.state_size))
@@ -189,7 +183,7 @@ class GMMConditionalTransformerModel(TransformerModel):
         phi_in_embedded = self.gaussian_embedding(phi_in)
         z_embedded = self.observation_embedding(z).unsqueeze(-2)
         decoder_output = self.transformer_decoder(phi_in_embedded, z_embedded)
-        phi_out_raw = self.feedforward_out(decoder_output)
+        phi_out_raw = self.gaussian_embedding(decoder_output, reverse=True)
         phi_w_raw = phi_out_raw[..., :, 0].reshape(batch_shape + (self.n_components,))
         phi_w = F.softmax(phi_w_raw, dim=-1)
         phi_mu = phi_out_raw[..., 1:1 + self.state_size].reshape(batch_shape + (self.n_components * self.state_size,))

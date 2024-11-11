@@ -29,7 +29,7 @@ device = torch.device("cuda:0")
 
 # Meta-prior
 meta_prior = GaussianMixtureModelConjugateMetaPrior(state_size=state_size, n_components=n_components,
-                                                    scale_parametrisation="precision_matrix")
+                                                    scale_parametrisation="covariance_matrix")
 
 # Observation model
 covariance_matrix = torch.eye(observation_size)
@@ -44,7 +44,7 @@ complete_distribution = CompleteDistribution(meta_prior, observation_model)
 model = GMMConditionalTransformerModel(n_components=n_components, state_size=state_size,
                                        n_observations=observation_model.n_observations, d_model=64, n_head=8,
                                        dim_feedforward=2048,
-                                       scale_parametrisation="precision_matrix")
+                                       scale_parametrisation="covariance_matrix")
 
 model = train(model, complete_distribution, compute_prior_loss=True, warmup_epochs=10,
               epochs=50, progress_bar=True, verbose=True, lr=0.0003, batch_size=5000)
