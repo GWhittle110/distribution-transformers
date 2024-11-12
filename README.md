@@ -1,1 +1,1 @@
-Amortised variational inference using transformers. Run main.py in src for example.
+Amortised Bayesian inference using distribution transformers. Run main.py for example, using CLI command `python main.py with experiments\configs\gmm_closed_form_config.yaml -F experiments\runs\gmm_closed_form --force`

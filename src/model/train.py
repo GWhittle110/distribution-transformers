@@ -18,7 +18,8 @@ from model.utils import get_openai_lr, get_cosine_schedule_with_warmup, torch_na
 def train(model: TransformerModel, complete_distribution: CompleteDistribution, epochs: int = 100,
           warmup_epochs: int = 10, steps_per_epoch: int = 100, batch_size: int = 1000, lr: float = None,
           weight_decay: float = 0.01, scheduler: type[LRScheduler] = None, gpu_device: str = "cuda:0",
-          compute_prior_loss: bool = False, verbose: bool = False, progress_bar: bool = False) -> TransformerModel:
+          compute_prior_loss: bool = False, verbose: bool = False, progress_bar: bool = False
+          ) -> tuple[TransformerModel, dict]:
     """
     Training routine for variational transformers. Note that a validation set is not necessary here as the model will
     see each datapoint only once, so overfitting is impossible and a reduction in train error corresponds to an
@@ -149,4 +150,4 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
         scheduler.step()
 
     model.eval()
-    return model.cpu()
+    return model.cpu(), epoch_metrics

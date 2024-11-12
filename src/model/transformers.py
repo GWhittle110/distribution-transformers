@@ -165,14 +165,16 @@ class GMMConditionalTransformerModel(TransformerModel):
         transformer_encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, dim_feedforward=dim_feedforward,
                                                                dropout=dropout, activation=activation,
                                                                batch_first=True, **kwargs)
-        self.transformer_encoder = nn.TransformerEncoder(transformer_encoder_layer, num_encoder_layers)
+        use_encoder = num_encoder_layers is not None and num_encoder_layers != 0
+        self.transformer_encoder = nn.TransformerEncoder(transformer_encoder_layer, num_encoder_layers) \
+            if use_encoder else nn.Identity()
 
         transformer_decoder_layer = nn.TransformerDecoderLayer(d_model, n_head, dim_feedforward=dim_feedforward,
                                                                dropout=dropout, activation=activation,
                                                                batch_first=True, **kwargs)
         self.transformer_decoder = nn.TransformerDecoder(transformer_decoder_layer, num_decoder_layers)
 
-        self.init_weights()
+        self.init_weights(use_encoder)
 
     def forward(self, phi_out: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         batch_shape = phi_out.shape[:-1]
@@ -197,12 +199,13 @@ class GMMConditionalTransformerModel(TransformerModel):
         phi_out = torch.cat([phi_out_w, phi_out_mu, phi_out_scale], dim=-1)
         return phi_out
 
-    def init_weights(self):
-        for layer in self.transformer_encoder.layers:
-            nn.init.zeros_(layer.linear2.weight)
-            nn.init.zeros_(layer.linear2.bias)
-            nn.init.zeros_(layer.self_attn.out_proj.weight)
-            nn.init.zeros_(layer.self_attn.out_proj.bias)
+    def init_weights(self, use_encoder: bool):
+        if use_encoder:
+            for layer in self.transformer_encoder.layers:
+                nn.init.zeros_(layer.linear2.weight)
+                nn.init.zeros_(layer.linear2.bias)
+                nn.init.zeros_(layer.self_attn.out_proj.weight)
+                nn.init.zeros_(layer.self_attn.out_proj.bias)
         for layer in self.transformer_decoder.layers:
             nn.init.zeros_(layer.linear2.weight)
             nn.init.zeros_(layer.linear2.bias)
