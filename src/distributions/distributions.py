@@ -21,7 +21,8 @@ class GaussianMixtureModel(MixtureSameFamily):
     support = constraints.real_vector
 
     def __init__(self, weights: torch.Tensor, loc: torch.Tensor, covariance_matrix: Optional[torch.Tensor] = None,
-                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
+                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None,
+                 *args, **kwargs):
         """
         Gaussian Mixture Model distribution. Supports sampling with different parameters in dimension 0.
 
@@ -47,12 +48,14 @@ class GaussianMixtureModel(MixtureSameFamily):
             scale_tril: torch.Tensor of lower triangular representation of scale matrix, i.e. Cholesky decomposition of
                 covariance matrix. Must have positive diagonal elements,
         """
-        super().__init__(Categorical(weights),
+        super().__init__(Categorical(weights, *args, **kwargs),
                          Independent(MultivariateNormal(loc,
                                                         covariance_matrix=covariance_matrix,
                                                         precision_matrix=precision_matrix,
-                                                        scale_tril=scale_tril),
-                                     0))
+                                                        scale_tril=scale_tril,
+                                                        *args, **kwargs),
+                                     0),
+                         *args, **kwargs)
         self.weights = weights
         self.loc = loc
         self.covariance_matrix = covariance_matrix

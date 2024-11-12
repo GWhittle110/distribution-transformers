@@ -82,19 +82,18 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
         for batch, full_data in enumerate(complete_data_sample):
             tqdm_iter.update() if tqdm_iter is not None else None
             full_data_decoded = complete_distribution.decode_sample(full_data)
-            data = torch.cat([full_data_decoded["phi"], full_data_decoded["z"]], dim=-1).to(device)
             targets = full_data_decoded["x"].to(device)
             before_forward = time.time()
-            phi_out = model(data)
+            phi_out = model(full_data_decoded["phi"].to(device), full_data_decoded["z"].to(device))
             forward_time = time.time() - before_forward
             phi_out_decoded = complete_distribution.meta_prior.decode_sample(phi_out)
             losses = -complete_distribution.meta_prior.prior(**phi_out_decoded).log_prob(targets)
             loss, nan_share = torch_nanmean(losses, return_nanshare=True)
             if compute_prior_loss and mean_prior_loss is None:
                 with torch.no_grad():
-                    prior_losses = -complete_distribution.meta_prior.prior(**complete_distribution.meta_prior.decode_sample(
-                        full_data_decoded["phi"].to(device)
-                    )).log_prob(targets)
+                    prior_losses = -complete_distribution.meta_prior.prior(
+                        **complete_distribution.meta_prior.decode_sample(full_data_decoded["phi"].to(device)
+                                                                         )).log_prob(targets)
                     prior_loss = torch_nanmean(prior_losses, return_nanshare=False)
                     total_prior_loss += prior_loss.cpu().item()
             nan_steps += nan_share.cpu().item()
@@ -117,7 +116,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
 
         return {
             "mean_loss": total_loss / steps_per_epoch,
-            "mean_prior_loss": total_prior_loss / steps_per_epoch,
+            "mean_prior_loss": mean_prior_loss,
             "epoch_load_time": time_to_get_epoch,
             "epoch_time": time.time() - before_get_batch,
             "mean_forward_time": total_forward_time / steps_per_epoch,

@@ -21,7 +21,7 @@ from model.train import train
 
 n_components = 1
 state_size = 1
-observation_size = 1
+observation_size = 3
 
 n_test_priors = 1000
 device = torch.device("cuda:0")
@@ -43,11 +43,12 @@ complete_distribution = CompleteDistribution(meta_prior, observation_model)
 # Variational transformer
 model = GMMConditionalTransformerModel(n_components=n_components, state_size=state_size,
                                        n_observations=observation_model.n_observations, d_model=64, n_head=8,
-                                       dim_feedforward=2048,
-                                       scale_parametrisation="covariance_matrix")
+                                       dim_feedforward=2048, num_encoder_layers=1,
+                                       scale_parametrisation="covariance_matrix",
+                                       dropout=0)
 
-model = train(model, complete_distribution, compute_prior_loss=True, warmup_epochs=10,
-              epochs=50, progress_bar=True, verbose=True, lr=0.0003, batch_size=5000)
+model = train(model, complete_distribution, compute_prior_loss=True, warmup_epochs=5,
+              epochs=25, progress_bar=True, lr=0.001, verbose=True, batch_size=5000, weight_decay=0)
 model.to(device)
 
 with torch.no_grad():
@@ -64,7 +65,7 @@ with torch.no_grad():
                                                                       test_observations)
     # Inference solution
     start_time = time()
-    model_posterior_params = model(torch.cat([test_prior_params, test_observations], dim=-1))
+    model_posterior_params = model(test_prior_params, test_observations)
     model_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params))
     inference_time = time() - start_time
     average_inference_time = inference_time / n_test_priors

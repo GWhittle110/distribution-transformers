@@ -50,6 +50,9 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
     
     schur_marginal_term = torch.einsum("ij,...jk,lk->...il", observation_matrix, prior_covariance_matrix,
                                        observation_matrix) + observation_covariance_matrix
+    schur_marginal_term = (schur_marginal_term.to(torch.float64) +
+                           torch.transpose(schur_marginal_term.to(torch.float64), dim0=-2, dim1=-1)) / 2
+    schur_marginal_term = schur_marginal_term.to(torch.float32)
     schur_inverse_term = torch.linalg.inv(schur_marginal_term)
     schur_covariance_term = torch.einsum("...ij,kj->...ik", prior_covariance_matrix, observation_matrix)
     observation_marginal_mean = torch.einsum("ij,...j->...i", observation_matrix, prior.loc)
@@ -64,6 +67,7 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
                                                                          schur_covariance_term)
     posterior_covariance_matrix = (posterior_covariance_matrix.to(torch.float64) +
                                    torch.transpose(posterior_covariance_matrix.to(torch.float64), dim0=-2, dim1=-1)) / 2
+    posterior_covariance_matrix = posterior_covariance_matrix.to(torch.float32)
 
     observation_component_marginals = MultivariateNormal(loc=observation_marginal_mean,
                                                          covariance_matrix=schur_marginal_term)
@@ -73,7 +77,7 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
     posterior_weights /= posterior_weights.sum(dim=-1).unsqueeze(-1)
 
     posterior = GaussianMixtureModel(weights=posterior_weights, loc=posterior_loc,
-                                     covariance_matrix=posterior_covariance_matrix)
+                                     covariance_matrix=posterior_covariance_matrix, validate_args=False)
     return posterior
 
 
