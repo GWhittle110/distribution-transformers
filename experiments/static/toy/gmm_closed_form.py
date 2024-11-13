@@ -15,61 +15,83 @@ from time import time
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, LinearGaussianObservationModel,
                                          CompleteDistribution, GaussianMixtureModel)
 from distributions.utils import gmm_with_linear_gaussian_observations_posterior, kl_divergence
-from model.transformers import GMMTransformerModel, GMMConditionalTransformerModel
+from model.transformers import GMMConditionalTransformerModel
 from model.train import train
 
 
-n_components = 1
-state_size = 1
-observation_size = 3
+def run(n_components: int, state_size: int, n_test_priors: int, n_kl_samples: int,
+        meta_prior_params: dict, observation_covariance_matrix: list[list[float]],
+        observation_matrix: list[list[float]], transformer_params: dict, training_params: dict, _run=None,
+        *args, **kwargs):
+    """
+    Run an experiment comparing distribution transformers to the closed form posterior of a GMM prior under linear
+    Gaussian observations.
 
-n_test_priors = 1000
-device = torch.device("cuda:0")
+    Args:
+        n_components: Number of GMM components.
+        state_size: Dimensionality of GMM.
+        n_test_priors: Number of sampled priors to compare model posterior to closed form posterior on.
+        n_kl_samples: Number of samples with which to compute the KL divergence between posteriors.
+        meta_prior_params: Dictionary of parameters for the meta prior.
+        observation_covariance_matrix: Observation covariance matrix, specified in list of lists format.
+        observation_matrix: Observation matrix, specified in list of lists format.
+        transformer_params: Dictionary of parameters for the transformer model.
+        training_params: Dictionary of parameters for the training routine.
+        _run: Sacred run object.
 
+    """
 
-# Meta-prior
-meta_prior = GaussianMixtureModelConjugateMetaPrior(state_size=state_size, n_components=n_components,
-                                                    scale_parametrisation="covariance_matrix")
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-# Observation model
-covariance_matrix = torch.eye(observation_size)
-observation_matrix = torch.rand((observation_size, state_size))
-observation_model = LinearGaussianObservationModel(observation_matrix=observation_matrix,
-                                                   covariance_matrix=covariance_matrix)
+    # Meta-prior
+    meta_prior = GaussianMixtureModelConjugateMetaPrior(state_size=state_size, n_components=n_components,
+                                                        **meta_prior_params)
 
-# Complete distribution
-complete_distribution = CompleteDistribution(meta_prior, observation_model)
+    # Observation model
+    covariance_matrix = torch.tensor(observation_covariance_matrix, dtype=torch.float32)
+    observation_matrix = torch.tensor(observation_matrix, dtype=torch.float32)
+    observation_model = LinearGaussianObservationModel(observation_matrix=observation_matrix,
+                                                       covariance_matrix=covariance_matrix)
 
-# Variational transformer
-model = GMMConditionalTransformerModel(n_components=n_components, state_size=state_size,
-                                       n_observations=observation_model.n_observations, d_model=64, n_head=8,
-                                       dim_feedforward=2048, num_encoder_layers=1,
-                                       scale_parametrisation="covariance_matrix",
-                                       dropout=0)
+    # Complete distribution
+    complete_distribution = CompleteDistribution(meta_prior, observation_model)
 
-model = train(model, complete_distribution, compute_prior_loss=True, warmup_epochs=5,
-              epochs=25, progress_bar=True, lr=0.001, verbose=True, batch_size=5000, weight_decay=0)
-model.to(device)
+    # Variational transformer
+    model = GMMConditionalTransformerModel(n_components=n_components, state_size=state_size,
+                                           n_observations=observation_model.n_observations, **transformer_params)
 
-with torch.no_grad():
-    # Test inputs
-    test_samples = complete_distribution.sample((n_test_priors,)).to(device)
-    test_prior_params = complete_distribution.decode_sample(test_samples)["phi"]
-    test_observations = complete_distribution.decode_sample(test_samples)["z"]
-    test_priors = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params))
+    before_training = time()
+    model, last_epoch_metrics = train(model, complete_distribution, **training_params)
+    training_time = time() - before_training
+    model.to(device)
 
-    # Exact solution
-    observation_model.observation_matrix = observation_model.observation_matrix.to(device)
-    observation_model.covariance_matrix = observation_model.covariance_matrix.to(device)
-    exact_posterior = gmm_with_linear_gaussian_observations_posterior(test_priors, observation_model,
-                                                                      test_observations)
-    # Inference solution
-    start_time = time()
-    model_posterior_params = model(test_prior_params, test_observations)
-    model_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params))
-    inference_time = time() - start_time
-    average_inference_time = inference_time / n_test_priors
+    with torch.no_grad():
+        # Test inputs
+        test_samples = complete_distribution.sample((n_test_priors,)).to(device)
+        test_prior_params = complete_distribution.decode_sample(test_samples)["phi"]
+        test_observations = complete_distribution.decode_sample(test_samples)["z"]
+        test_priors = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params))
 
-    kl_divergences = kl_divergence(model_posterior, exact_posterior, 10000)
-    prior_kl_divergences = kl_divergence(test_priors, exact_posterior, 10000)
-    print(kl_divergences.mean(), prior_kl_divergences.mean())
+        # Exact solution
+        observation_model.observation_matrix = observation_model.observation_matrix.to(device)
+        observation_model.covariance_matrix = observation_model.covariance_matrix.to(device)
+        exact_posterior = gmm_with_linear_gaussian_observations_posterior(test_priors, observation_model,
+                                                                          test_observations)
+        # Inference solution
+        start_time = time()
+        model_posterior_params = model(test_prior_params, test_observations)
+        model_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params))
+        inference_time = time() - start_time
+
+        kl_divergences = kl_divergence(model_posterior, exact_posterior, n_kl_samples)
+        prior_kl_divergences = kl_divergence(test_priors, exact_posterior, n_kl_samples)
+        print(f"Model mean KL divergence: {kl_divergences.mean().item()} \n"
+              f"Prior mean KL divergence: {prior_kl_divergences.mean().item()}")
+
+        _run.info.update({"training_epoch_metrics": last_epoch_metrics,
+                          "training_time": training_time,
+                          "test_inference_time": inference_time,
+                          "model_mean_kl_divergence": kl_divergences.mean().item(),
+                          "prior_mean_kl_divergence": prior_kl_divergences.mean().item(),
+                          "model_std_kl_divergence": kl_divergences.std().item(),
+                          "prior_std_kl_divergence": prior_kl_divergences.std().item()})

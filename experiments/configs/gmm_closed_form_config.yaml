@@ -1,0 +1,31 @@
+name: gmm_closed_form
+module_path: "static.toy.gmm_closed_form"
+
+n_components: 1
+state_size: 1
+observation_size: 3
+n_test_priors: 1000
+n_kl_samples: 10000
+
+observation_covariance_matrix: [[1]]
+observation_matrix: [[1]]
+
+meta_prior_params:
+  scale_parametrisation: covariance_matrix
+
+transformer_params:
+  d_model: 64
+  n_head: 8
+  dim_feedforward: 2048
+  num_encoder_layers: null
+  dropout: 0
+
+training_params:
+  compute_prior_loss: True
+  warmup_epochs: 5
+  epochs: 25
+  progress_bar: True
+  lr: 0.001
+  verbose: True
+  batch_size: 5000
+  weight_decay: 0
