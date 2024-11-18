@@ -58,12 +58,6 @@ def test_gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureM
                                                          observations: torch.Tensor,
                                                          expected_result: GaussianMixtureModel):
     posterior = gmm_with_linear_gaussian_observations_posterior(prior, observation_model, observations)
-    print(posterior.weights)
-    print(expected_result.weights)
-    print(posterior.loc)
-    print(expected_result.loc)
-    print(posterior.covariance_matrix)
-    print(expected_result.covariance_matrix)
     assert torch.allclose(posterior.weights, expected_result.weights, atol=1e-4)
     assert torch.allclose(posterior.loc, expected_result.loc, atol=1e-4)
     assert torch.allclose(posterior.covariance_matrix, expected_result.covariance_matrix, atol=1e-4)
@@ -96,7 +90,7 @@ def test_gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureM
             MultivariateNormal(loc=torch.zeros(2).broadcast_to(10, 2),
                                covariance_matrix=torch.eye(2).broadcast_to(10, 2, 2)),
             MultivariateNormal(loc=torch.ones(2).broadcast_to(10, 2),
-                               covariance_matrix=2*torch.eye(2).broadcast_to(10, 2)),
+                               covariance_matrix=2*torch.eye(2).broadcast_to(10, 2, 2)),
             kl_divergence(MultivariateNormal(loc=torch.zeros(2),
                                              covariance_matrix=torch.eye(2)),
                           MultivariateNormal(loc=torch.ones(2),
