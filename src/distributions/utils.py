@@ -3,13 +3,9 @@ Utility functions for distributions
 """
 
 import torch
-from torch.distributions import Distribution, MultivariateNormal, Wishart
-from torch.autograd.functional import jacobian
-from torch.types import _size
-
-from sklearn.mixture import GaussianMixture
-from typing import Optional, Callable
-from functools import partial
+from torch.distributions import Distribution, MultivariateNormal, InverseGamma, Normal
+from torch.func import vmap, jacrev
+from typing import Optional
 
 from distributions.distributions import GaussianMixtureModel, LinearGaussianObservationModel
 
@@ -89,18 +85,27 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
 
 def kl_divergence(p: Distribution, q: Distribution,
                   q_transform: Optional[callable] = None,
-                  q_transform_shape_in: Optional[_size] = None,
-                  q_transform_shape_out: Optional[_size] = None,
-                  n_samples: int = 1000000):
+                  n_samples: int = 100000):
     """
     Compute a stochastic approximation to KL[p||q]
+
+    Example - transform, no batching:
+        >>> p = InverseGamma(1, 1)
+        >>> q = Normal(0, 1)
+        >>> q_transform = torch.log
+        >>> print(kl_divergence(p, q, q_transform))
+
+    Example - transform, batching:
+        >>> p = InverseGamma(torch.ones(2, 2), torch.ones(2, 2))
+        >>> q = Normal(torch.zeros(2, 2), torch.ones(2, 2))
+        >>> q_transform = torch.log
+        >>> print(kl_divergence(p, q, q_transform))
+
     Args:
         p: Distribution p.
         q: Distribution q.
         q_transform: Transform from sample space of p to sample space of q.
             Defaults to None.
-        q_transform_shape_in: Shape of input to q_transform.
-        q_transform_shape_out: Shape of output to q_transform.
         n_samples: Number of samples with which to compute stochastic approximation.
 
     Returns:
@@ -110,85 +115,12 @@ def kl_divergence(p: Distribution, q: Distribution,
     samples = p.sample((n_samples,))
     q_samples = samples if q_transform is None else q_transform(samples)
     evaluations = p.log_prob(samples) - q.log_prob(q_samples)
+    evaluations[evaluations == -float("inf")] = torch.nan
     if q_transform is not None:
-        assert q_transform_shape_in is not None, "Must specify input and output shapes of q_transform"
-        n_in = torch.prod(torch.tensor(q_transform_shape_in)).to(torch.int).item()
-        n_out = torch.prod(torch.tensor(q_transform_shape_out)).to(torch.int).item()
+        n_in = torch.prod(torch.tensor(p.event_shape)).to(torch.int).item()
+        n_out = torch.prod(torch.tensor(q.event_shape)).to(torch.int).item()
         assert n_in == n_out, "Only transformations which preserve the number of elements are supported."
-        batch_shape = samples.shape[:-len(q_transform_shape_in)] if len(q_transform_shape_in) else samples.shape
-
-        samples = samples.flatten(end_dim=len(batch_shape)-1)
-        evaluations -= torch.stack([torch.logdet(jacobian(q_transform, sample, vectorize=True).reshape(n_out, n_in))
-                                    for sample in samples]).reshape(batch_shape)
+        if len(p.batch_shape):
+            samples = samples.flatten(end_dim=len(p.batch_shape))
+        evaluations -= torch.logdet(vmap(jacrev(q_transform))(samples).reshape((-1,) + p.batch_shape + (n_out, n_in)))
     return evaluations.nanmean(dim=0)
-
-
-def distribution_to_gmm(p: Distribution, n_components: int,
-                        transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-                        n_samples: int = 1000, scale_parametrisation: str = "covariance_matrix",
-                        *args, **kwargs) -> torch.Tensor:
-    """
-    Approximate an arbitrary distribution p with a Gaussian mixture model with a specified number of components.
-    Samples n_samples from p and fits the GMM using Expectation Maximisation.
-
-    Examples:
-        >>> root_state_size = 2
-        >>> p = Wishart(root_state_size + 1, torch.eye(root_state_size))
-        >>> state_size = root_state_size ** 2
-        >>> n_components = 4
-        >>> transform = partial(torch.flatten, start_dim=-2)
-        >>> phi = distribution_to_gmm(p, n_components, transform)
-        >>> weights = phi[..., :n_components]
-        >>> loc = phi[..., n_components:(1 + state_size) * n_components].unflatten(-1, (n_components, state_size))
-        >>> scale = phi[..., -n_components * state_size ** 2:].unflatten(-1, (n_components, state_size, state_size))
-        >>> gmm = GaussianMixtureModel(weights, loc, covariance_matrix=scale)
-        >>> print(kl_divergence(p, gmm, transform))
-
-    Args:
-        p: Probability distribution to approximate.
-        n_components: Number of components in approximating GMM.
-        transform: Transform under which to fit the GMM.
-            Defaults to None.
-        n_samples: Number of samples on which to perform EM.
-            Defaults to 1000.
-        scale_parametrisation: Parametrisation of scale parameter of GMM. One of "covariance_matrix", "precision_matrix"
-            or "scale_tril".
-            Defaults to "covariance_matrix".
-        *args, **kwargs for sklearn GaussianMixture.
-
-    Returns:
-        Tensor of distribution parameters
-
-    """
-    samples = p.sample((n_samples,))
-    if transform is not None:
-        samples = transform(samples)
-    device = samples.device
-    samples = samples.cpu().detach()
-    if samples.dim() > 2:
-        batch_shape = samples.shape[1:-1]
-        samples = torch.movedim(samples, 0, -2)
-    else:
-        samples = samples.unsqueeze(0)
-        batch_shape = tuple()
-
-    # Inner function for handling batched distributions
-    def inner(sample):
-        gmm = GaussianMixture(n_components=n_components, *args, **kwargs)
-        gmm.fit(sample)
-        weights = torch.tensor(gmm.weights_)
-        loc = torch.tensor(gmm.means_)
-        match scale_parametrisation:
-            case "covariance_matrix":
-                scale = torch.tensor(gmm.covariances_)
-            case "precision_matrix":
-                scale = torch.tensor(gmm.precisions_)
-            case "scale_tril":
-                scale = torch.cholesky(torch.tensor(gmm.covariances_))
-            case _:
-                raise ValueError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
-                                 '"scale_tril')
-        return torch.hstack([weights.flatten(), loc.flatten(), scale.flatten()])
-
-    phi = torch.cat([inner(sample) for sample in samples.flatten(0, -3)]).to(device)
-    return phi.reshape(batch_shape + (-1,))

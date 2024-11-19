@@ -4,7 +4,7 @@ Custom distributions used by the model for meta-priors, priors, likelihoods and 
 
 import torch
 from torch.distributions import (Distribution, Wishart, MultivariateNormal, Independent, Categorical,
-                                 MixtureSameFamily, Dirichlet, constraints)
+                                 MixtureSameFamily, Dirichlet, InverseGamma, constraints)
 from torch.distributions.utils import lazy_property
 from torch.types import _size
 from typing import Optional, Callable
@@ -46,7 +46,7 @@ class GaussianMixtureModel(MixtureSameFamily):
             covariance_matrix: Tensor of covariance matrices of each mixture component. Must all be positive definite.
             precision_matrix:  Tensor of precision matrices of each mixture component. Must all be positive definite.
             scale_tril: torch.Tensor of lower triangular representation of scale matrix, i.e. Cholesky decomposition of
-                covariance matrix. Must have positive diagonal elements,
+                covariance matrix. Must have positive diagonal elements.
         """
         super().__init__(Categorical(weights, *args, **kwargs),
                          Independent(MultivariateNormal(loc,
@@ -128,22 +128,22 @@ class MetaPrior(Distribution):
         Decode tensor of sampled parameters to dictionary of tensors keyed by parameter.
 
         Args:
-            sample: Sampled tensor
+            sample: Sampled tensor.
 
         Returns:
-            Decoded sample
+            Decoded sample.
         """
         raise NotImplementedError
 
     def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
         Args:
-            decoded_sample:  Dictionary of decoded sample
+            decoded_sample:  Dictionary of decoded sample.
 
         Returns:
-            Tensor encoding sample
+            Tensor encoding sample.
         """
         raise NotImplementedError
 
@@ -320,10 +320,10 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
 
         Args:
-            sample: Sampled tensor
+            sample: Sampled tensor.
 
         Returns:
-            Decoded sample
+            Decoded sample.
         """
         sample_shape = sample.shape[:-1]
         weights = sample[..., :self.n_components]
@@ -340,13 +340,13 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
 
     def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
         Args:
-            decoded_sample:  Dictionary of decoded sample
+            decoded_sample:  Dictionary of decoded sample.
 
         Returns:
-            Tensor encoding sample
+            Tensor encoding sample.
         """
         weights = decoded_sample["weights"]
         loc = decoded_sample["loc"]
@@ -398,6 +398,76 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         return self.scale_eps
 
 
+class InverseGammaMetaPrior(MetaPrior):
+    arg_constraints = {
+        "concentration_rate": constraints.positive,
+        "rate_rate": constraints.positive
+    }
+    has_rsample = True
+
+    def __init__(self, concentration_concentration: float = 1, concentration_rate: float = 1,
+                 rate_concentration: int = 1, rate_rate: int = 1):
+        """
+        Meta prior for an inverse gamma distribution.
+
+        Args:
+            concentration_concentration: Concentration parameter for inverse gamma meta-prior of concentration
+                parameter.
+            concentration_rate: Rate parameter for inverse gamma meta-prior of concentration parameter.
+            rate_concentration: Concentration parameter for inverse gamma meta-prior of rate parameter.
+            rate_rate: Rate parameter for inverse gamma meta-pior of rate parameter.
+
+        """
+        super().__init__(InverseGamma)
+        self.concentration_concentration = concentration_concentration
+        self.concentration_rate = concentration_rate
+        self.rate_concentration = rate_concentration
+        self.rate_rate = rate_rate
+
+    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
+        concentration = InverseGamma(self.concentration_concentration, self.concentration_rate).sample(sample_shape)
+        rate = InverseGamma(self.rate_concentration, self.rate_rate).sample(sample_shape)
+        return torch.stack([concentration, rate], dim=-1)
+
+    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
+        """
+        Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
+
+        Args:
+            sample: Sampled tensor.
+
+        Returns:
+            Decoded sample.
+        """
+        sample_shape = sample.shape[:-1]
+        concentration = sample[..., 0]
+        rate = sample[..., 1]
+        return {"concentration": concentration,
+                "rate": rate}
+
+    def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
+
+        Args:
+            decoded_sample:  Dictionary of decoded sample.
+
+        Returns:
+            Tensor encoding sample.
+        """
+        concentration = decoded_sample["concentration"]
+        rate = decoded_sample["rate"]
+        return torch.stack([concentration, rate], dim=-1)
+
+    @lazy_property
+    def concentration_rate(self):
+        return self.concentration_rate
+
+    @lazy_property
+    def rate_rate(self):
+        return self.rate_rate
+
+
 class ObservationModel(Distribution):
     has_rsample = True
 
@@ -411,7 +481,7 @@ class ObservationModel(Distribution):
 
     def condition_(self, x: torch.Tensor):
         """
-        Condition observation distribution on state
+        Condition observation distribution on state.
         Args:
             x: State to condition sample on. Can be batched or not.
 
@@ -431,7 +501,7 @@ class DirectGaussianObservationModel(ObservationModel):
     def __init__(self, covariance_matrix: Optional[torch.Tensor] = None,
                  precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
         """
-        Observation model for direction observation of state subject to Gaussian noise
+        Observation model for direction observation of state subject to Gaussian noise.
 
         Example - no batching:
             >>> x = torch.ones(2, dtype=torch.float32)
@@ -493,7 +563,7 @@ class DirectGaussianObservationModel(ObservationModel):
 
     def condition_(self, x: torch.Tensor):
         """
-        Condition observation distribution on state
+        Condition observation distribution on state.
         Args:
             x: State to condition sample on. Can be batched or not.
 
@@ -525,7 +595,7 @@ class MappedGaussianObservationModel(DirectGaussianObservationModel):
                  precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None,
                  mapping: Optional[Callable[[torch.Tensor], torch.Tensor]] = None):
         """
-        Observation model for observation of mapping of state subject to Gaussian noise
+        Observation model for observation of mapping of state subject to Gaussian noise.
 
         Example - no batching:
             >>> x = torch.ones(2, dtype=torch.float32)
@@ -568,7 +638,7 @@ class LinearGaussianObservationModel(MappedGaussianObservationModel):
     def __init__(self, observation_matrix: torch.Tensor = None, covariance_matrix: Optional[torch.Tensor] = None,
                  precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
         """
-        Observation model for observation of mapping of state subject to Gaussian noise
+        Observation model for observation of mapping of state subject to Gaussian noise.
 
         Example - no batching:
             >>> x = torch.ones(2, dtype=torch.float32)
@@ -587,7 +657,7 @@ class LinearGaussianObservationModel(MappedGaussianObservationModel):
             >>> print(mgom.sample())
 
         Args:
-            observation_matrix: Matrix mapping from state to observation
+            observation_matrix: Matrix mapping from state to observation.
             covariance_matrix: Covariance matrix for Gaussian noise.
             precision_matrix: Precision matrix for Gaussian noise.
             scale_tril: Lower triangular scale parameter for Gaussian noise.
@@ -605,7 +675,7 @@ class LinearGaussianObservationModel(MappedGaussianObservationModel):
             )
 
         assert observation_matrix.dim() == 2, \
-            "Observation matrix must be exactly 2 dimensional, batching is not supported"
+            "Observation matrix must be exactly 2 dimensional, batching is not supported."
         assert observation_matrix.shape[-2] == n_obs
         self.observation_matrix = observation_matrix
         mapping = lambda x: torch.einsum("ij,...j->...i", self.observation_matrix, x)
@@ -613,6 +683,96 @@ class LinearGaussianObservationModel(MappedGaussianObservationModel):
                          precision_matrix=precision_matrix,
                          scale_tril=scale_tril,
                          mapping=mapping)
+
+
+class ScaleGaussianObservationModel(ObservationModel):
+    arg_constraints = {
+        "loc": constraints.real_vector
+    }
+
+    def __init__(self, loc: torch.Tensor, scale_parametrisation: Optional[str] = None):
+        """
+        Observation model for observing state via its parametrisation of a Gaussian's scale parameter.
+
+        Example - no batching:
+            >>> loc = torch.ones(2, dtype=torch.float32)
+            >>> x = torch.eye(2, dtype=torch.float32)
+            >>> sgom = ScaleGaussianObservationModel(loc=loc)
+            >>> sgom.condition_(x)
+            >>> print(sgom.sample())
+
+        Example - batching:
+            >>> loc = torch.ones((3, 2), dtype=torch.float32)
+            >>> x = torch.eye(2, dtype=torch.float32).broadcast_to((3, 2, 2))
+            >>> sgom = ScaleGaussianObservationModel(loc=loc)
+            >>> sgom.condition_(x)
+            >>> print(sgom.sample())
+
+        Args:
+            loc: Mean of observation distribution.
+            scale_parametrisation: Scale parametrisation style of Gaussian.
+
+        """
+        super().__init__()
+        assert scale_parametrisation in {None, "covariance_matrix", "precision_matrix", "scale_tril"}, \
+            'scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or "scale_tril"'
+        self.distribution: Optional[MultivariateNormal] = None
+        self.loc = loc
+        self.scale_parametrisation = "covariance_matrix" if scale_parametrisation is None else scale_parametrisation
+
+    def condition_(self, x: torch.Tensor):
+        """
+        Condition observation distribution on state.
+        Args:
+            x: State to condition sample on. Can be batched or not.
+
+        """
+        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation: x})
+
+    @lazy_property
+    def loc(self):
+        return self.loc
+
+
+class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
+
+    def __init__(self, loc: torch.Tensor, scale_parametrisation: Optional[str] = None,
+                 mapping: Optional[Callable[[torch.Tensor], torch.Tensor]] = None):
+        """
+        Observation model for observing state via its parametrisation of a Gaussian's scale parameter.
+
+        Example - no batching:
+            >>> loc = torch.ones(1, dtype=torch.float32)
+            >>> mapping = torch.exp
+            >>> x = torch.eye(1, dtype=torch.float32)
+            >>> msgom = MappedScaleGaussianObservationModel(loc=loc, mapping=mapping)
+            >>> msgom.condition_(x)
+            >>> print(msgom.sample())
+
+        Example - batching:
+            >>> loc = torch.ones((3, 2), dtype=torch.float32)
+            >>> x = torch.eye(2, dtype=torch.float32).broadcast_to((3, 2, 2))
+            >>> msgom = MappedScaleGaussianObservationModel(loc=loc)
+            >>> msgom.condition_(x)
+            >>> print(msgom.sample())
+
+        Args:
+            loc: Mean of observation distribution.
+            scale_parametrisation: Scale parametrisation style of Gaussian.
+
+        """
+        super().__init__(loc=loc, scale_parametrisation=scale_parametrisation)
+        self.mapping = torch.nn.Identity() if mapping is None else mapping
+
+    def condition_(self, x: torch.Tensor):
+        """
+        Condition observation distribution on state.
+        Args:
+            x: State to condition sample on. Can be batched or not.
+
+        """
+        x = self.mapping(x)
+        super().condition_(x)
 
 
 class CompleteDistribution(Distribution):
@@ -639,8 +799,11 @@ class CompleteDistribution(Distribution):
             >>> print(complete_distribution.sample((5, 10)))
 
         Args:
-            meta_prior: Meta-prior distribution, p(phi)
-            observation_model: Observation model, p(z|x)
+            meta_prior: Meta-prior distribution, p(phi).
+            observation_model: Observation model, p(z|x).
+                to the transformed meta-prior.
+                Defaults to None
+
         """
         super().__init__()
         self.meta_prior = meta_prior
@@ -661,10 +824,10 @@ class CompleteDistribution(Distribution):
         observations z.
 
         Args:
-            sample: Sampled tensor
+            sample: Sampled tensor.
 
         Returns:
-            Decoded sample
+            Decoded sample.
         """
         phi = sample[..., :self.meta_prior.prior_size]
         x = sample[..., self.meta_prior.prior_size:-self.observation_model.n_observations]
@@ -676,13 +839,13 @@ class CompleteDistribution(Distribution):
     @staticmethod
     def encode_sample(decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
         Args:
-            decoded_sample:  Dictionary of decoded sample
+            decoded_sample:  Dictionary of decoded sample.
 
         Returns:
-            Tensor encoding sample
+            Tensor encoding sample.
         """
         phi = decoded_sample["phi"]
         x = decoded_sample["x"]
