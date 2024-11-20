@@ -1,0 +1,31 @@
+name: gmm_closed_form
+module_path: "static.toy.inverse_gamma_variance_closed_form"
+
+n_components: 4
+observation_size: 1
+n_test_priors: 1000
+n_kl_samples: 10000
+
+observation_loc: [0]
+
+meta_prior_params:
+  concentration_rate: 1
+  rate_rate: 1
+
+transformer_params:
+  d_model: 64
+  n_head: 8
+  dim_feedforward: 2048
+  num_encoder_layers: null
+  dropout: 0
+
+training_params:
+  compute_prior_loss: True
+  warmup_epochs: 5
+  epochs: 50
+  progress_bar: True
+  lr: 0.001
+  verbose: True
+  batch_size: 1000
+  steps_per_epoch: 50
+  weight_decay: 0

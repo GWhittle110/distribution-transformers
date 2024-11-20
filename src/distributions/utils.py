@@ -114,6 +114,7 @@ def kl_divergence(p: Distribution, q: Distribution,
     """
     samples = p.sample((n_samples,))
     q_samples = samples if q_transform is None else q_transform(samples)
+    q_samples = q_samples.reshape((n_samples,) + q.batch_shape + q.event_shape)
     evaluations = p.log_prob(samples) - q.log_prob(q_samples)
     evaluations[evaluations == -float("inf")] = torch.nan
     if q_transform is not None:

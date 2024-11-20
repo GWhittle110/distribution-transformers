@@ -424,6 +424,8 @@ class InverseGammaMetaPrior(MetaPrior):
         self.rate_concentration = rate_concentration
         self.rate_rate = rate_rate
 
+        self.prior_size = 2
+
     def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
         concentration = InverseGamma(self.concentration_concentration, self.concentration_rate).sample(sample_shape)
         rate = InverseGamma(self.rate_concentration, self.rate_rate).sample(sample_shape)
@@ -439,7 +441,6 @@ class InverseGammaMetaPrior(MetaPrior):
         Returns:
             Decoded sample.
         """
-        sample_shape = sample.shape[:-1]
         concentration = sample[..., 0]
         rate = sample[..., 1]
         return {"concentration": concentration,
@@ -478,6 +479,7 @@ class ObservationModel(Distribution):
         super().__init__()
         self.distribution: Optional[Distribution] = None
         self.n_observations: Optional[int] = None
+        self.mapping = torch.nn.Identity()
 
     def condition_(self, x: torch.Tensor):
         """
@@ -718,6 +720,7 @@ class ScaleGaussianObservationModel(ObservationModel):
             'scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or "scale_tril"'
         self.distribution: Optional[MultivariateNormal] = None
         self.loc = loc
+        self.n_observations = loc.shape[-1]
         self.scale_parametrisation = "covariance_matrix" if scale_parametrisation is None else scale_parametrisation
 
     def condition_(self, x: torch.Tensor):
@@ -727,7 +730,7 @@ class ScaleGaussianObservationModel(ObservationModel):
             x: State to condition sample on. Can be batched or not.
 
         """
-        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation: x})
+        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation: x.unsqueeze(-1)})
 
     @lazy_property
     def loc(self):
@@ -801,8 +804,6 @@ class CompleteDistribution(Distribution):
         Args:
             meta_prior: Meta-prior distribution, p(phi).
             observation_model: Observation model, p(z|x).
-                to the transformed meta-prior.
-                Defaults to None
 
         """
         super().__init__()

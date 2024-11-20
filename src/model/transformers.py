@@ -176,13 +176,13 @@ class GMMConditionalTransformerModel(TransformerModel):
 
         self.init_weights(use_encoder)
 
-    def forward(self, phi_out: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        batch_shape = phi_out.shape[:-1]
-        phi_in_w = self.weight_transform(phi_out[..., :self.n_components])    # Move to logit space
+    def forward(self, phi_in: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        batch_shape = phi_in.shape[:-1]
+        phi_in_w = self.weight_transform(phi_in[..., :self.n_components])    # Move to logit space
         phi_in_w = phi_in_w.reshape(batch_shape + (self.n_components, 1))
-        phi_in_mu = phi_out[..., self.n_components:self.n_components + self.state_size * self.n_components]
+        phi_in_mu = phi_in[..., self.n_components:self.n_components + self.state_size * self.n_components]
         phi_in_mu = phi_in_mu.reshape(batch_shape + (self.n_components, self.state_size))
-        phi_in_scale = phi_out[..., -self.state_size ** 2 * self.n_components:]
+        phi_in_scale = phi_in[..., -self.state_size ** 2 * self.n_components:]
         phi_in_scale = phi_in_scale.reshape(batch_shape + (self.n_components, self.state_size ** 2))
         phi_in = torch.cat([phi_in_w, phi_in_mu, phi_in_scale], dim=-1)
         phi_in_embedded = self.gaussian_embedding(phi_in)
