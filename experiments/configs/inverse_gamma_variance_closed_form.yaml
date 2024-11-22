@@ -1,7 +1,7 @@
 name: gmm_closed_form
 module_path: "static.toy.inverse_gamma_variance_closed_form"
 
-n_components: 4
+n_components: 20
 observation_size: 1
 n_test_priors: 1000
 n_kl_samples: 10000

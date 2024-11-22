@@ -5,7 +5,8 @@ Utility functions for distributions
 import torch
 from torch.distributions import Distribution, MultivariateNormal, InverseGamma, Normal
 from torch.func import vmap, jacrev
-from typing import Optional
+from typing import Optional, Callable
+import matplotlib.pyplot as plt
 
 from distributions.distributions import GaussianMixtureModel, LinearGaussianObservationModel
 
@@ -27,6 +28,8 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
         Posterior Gaussian mixture model.
 
     """
+    device = prior.loc.device
+
     match prior.scale_parametrisation:
         case "covariance_matrix":
             prior_covariance_matrix = prior.covariance_matrix
@@ -48,10 +51,10 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
         case _:
             raise ValueError
 
-    observation_matrix = observation_model.observation_matrix
+    observation_matrix = observation_model.observation_matrix.to(device)
 
     schur_marginal_term = torch.einsum("ij,...jk,lk->...il", observation_matrix, prior_covariance_matrix,
-                                       observation_matrix) + observation_covariance_matrix
+                                       observation_matrix) + observation_covariance_matrix.to(device)
     schur_marginal_term = (schur_marginal_term.to(torch.float64) +
                            torch.transpose(schur_marginal_term.to(torch.float64), dim0=-2, dim1=-1)) / 2
     schur_marginal_term = schur_marginal_term.to(torch.float32)
@@ -84,7 +87,7 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
 
 
 def kl_divergence(p: Distribution, q: Distribution,
-                  q_transform: Optional[callable] = None,
+                  q_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
                   n_samples: int = 100000):
     """
     Compute a stochastic approximation to KL[p||q]
@@ -125,3 +128,48 @@ def kl_divergence(p: Distribution, q: Distribution,
             samples = samples.flatten(end_dim=len(p.batch_shape))
         evaluations -= torch.logdet(vmap(jacrev(q_transform))(samples).reshape((-1,) + p.batch_shape + (n_out, n_in)))
     return evaluations.nanmean(dim=0)
+
+
+def plot_distributions(p: Distribution, q: Optional[Distribution] = None,
+                       q_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+                       bounds: tuple[float, float] = (-5., 5.),
+                       n_points: int = 1000) -> plt.Figure:
+    """
+    Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
+
+    Example:
+        >>> p = InverseGamma(1, 1)
+        >>> q = GaussianMixtureModel(weights=torch.ones(1), loc=torch.zeros(1, 1), scale_tril=torch.ones(1, 1, 1))
+        >>> plot_distributions(p, q, torch.log, (0.01, 5))
+
+    Args:
+        p: First distribution to plot.
+        q: Second distribution to plot.
+        q_transform: Transform mapping sample space of p to sample space of q.
+        bounds: Tuple of upper and lower bounds.
+        n_points: Number of points at which to evaluate density. Uniformly distributed in bounds.
+
+    Returns:
+        Figure object.
+
+    """
+    points = torch.linspace(*bounds, steps=n_points)
+    p_density = p.log_prob(points.reshape((n_points,) + p.event_shape)).exp()
+    if len(p.batch_shape) != 0:
+        p_density = p_density[0]
+    fig, ax = plt.subplots()
+    ax.plot(points, p_density)
+
+    if q is not None:
+        if q_transform is None:
+            q_transform = torch.nn.Identity()
+        q_density = torch.exp(q.log_prob(q_transform(points).reshape((n_points,) + q.event_shape))
+                              + torch.log(vmap(jacrev(q_transform))(points).reshape((-1,) + p.batch_shape)))
+        ax.plot(points, q_density)
+        ax.legend(["p", "q"])
+        ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform):5.4f}", (0.6, 0.9), xycoords="axes fraction")
+
+    ax.set_title("Density plot")
+    ax.set_ylabel("Density")
+    plt.show()
+    return fig

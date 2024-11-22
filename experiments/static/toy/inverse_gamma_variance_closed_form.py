@@ -15,7 +15,7 @@ from time import time
 
 from distributions.distributions import InverseGammaMetaPrior, MappedScaleGaussianObservationModel, GaussianMixtureModel
 from distributions.special import ApproximateWarpedGMMMetaPrior, ApproximateCompleteDistribution
-from distributions.utils import kl_divergence
+from distributions.utils import kl_divergence, plot_distributions
 from model.transformers import GMMConditionalTransformerModel
 from model.train import train
 
@@ -99,7 +99,18 @@ def run(n_components: int, n_test_priors: int, n_kl_samples: int,
                           "prior_std_kl_divergence": prior_kl_divergences.std().item()})
 
         # For plotting
-        print(f"Test prior: {test_exact_prior_params[0]}")
-        print(f"Test approximated prior: {test_prior_params[0]}")
-        print(f"Test posterior: {exact_posterior_concentration[0], exact_posterior_rate[0]}")
-        print(f"Test prior: {model_posterior_params[0]}")
+        max_x = lambda concentration, rate: (4 * rate / concentration + 1 / rate).item()
+        plot_exact_prior = InverseGamma(
+            **complete_distribution.meta_prior.meta_prior.decode_sample(test_exact_prior_params[0].cpu()))
+        plot_prior = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params[0].cpu()))
+        prior_plot = plot_distributions(plot_exact_prior, plot_prior, torch.log,
+                                        (0.001, max_x(*test_exact_prior_params[0].cpu())))
+        prior_plot.savefig(_run.observers[0].dir+"\\prior_plot.png")
+
+        plot_exact_posterior = InverseGamma(concentration=exact_posterior_concentration[0].cpu(),
+                                            rate=exact_posterior_rate[0].cpu())
+        plot_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params[0].cpu()))
+        posterior_plot = plot_distributions(plot_exact_posterior, plot_posterior, torch.log,
+                                            (0.001, max_x(exact_posterior_concentration[0].cpu(),
+                                                          exact_posterior_rate[0].cpu())))
+        posterior_plot.savefig(_run.observers[0].dir + "\\posterior_plot.png")

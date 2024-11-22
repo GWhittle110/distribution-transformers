@@ -2,7 +2,6 @@
 Main python file for running experiments. Pass the name of the config as an argument called from the command line.
 """
 from sacred import Experiment
-from sacred.observers import FileStorageObserver
 from sacred.utils import apply_backspaces_and_linefeeds
 from importlib import import_module
 

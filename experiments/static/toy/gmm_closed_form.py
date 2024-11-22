@@ -14,7 +14,7 @@ from time import time
 
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, LinearGaussianObservationModel,
                                          CompleteDistribution, GaussianMixtureModel)
-from distributions.utils import gmm_with_linear_gaussian_observations_posterior, kl_divergence
+from distributions.utils import gmm_with_linear_gaussian_observations_posterior, kl_divergence, plot_distributions
 from model.transformers import GMMConditionalTransformerModel
 from model.train import train
 
@@ -83,8 +83,8 @@ def run(n_components: int, state_size: int, n_test_priors: int, n_kl_samples: in
         model_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params))
         inference_time = time() - start_time
 
-        kl_divergences = kl_divergence(model_posterior, exact_posterior, n_kl_samples)
-        prior_kl_divergences = kl_divergence(test_priors, exact_posterior, n_kl_samples)
+        kl_divergences = kl_divergence(model_posterior, exact_posterior, n_samples=n_kl_samples)
+        prior_kl_divergences = kl_divergence(test_priors, exact_posterior, n_samples=n_kl_samples)
         print(f"Model mean KL divergence: {kl_divergences.mean().item()} \n"
               f"Prior mean KL divergence: {prior_kl_divergences.mean().item()}")
 
@@ -95,3 +95,14 @@ def run(n_components: int, state_size: int, n_test_priors: int, n_kl_samples: in
                           "prior_mean_kl_divergence": prior_kl_divergences.mean().item(),
                           "model_std_kl_divergence": kl_divergences.std().item(),
                           "prior_std_kl_divergence": prior_kl_divergences.std().item()})
+
+        if state_size == 1:
+            plot_prior = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params[0].cpu()))
+            prior_plot = plot_distributions(plot_prior, bounds=(-10, 10))
+            prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
+
+            plot_exact_posterior = gmm_with_linear_gaussian_observations_posterior(plot_prior, observation_model,
+                                                                                   test_observations[0].cpu())
+            plot_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params[0].cpu()))
+            posterior_plot = plot_distributions(plot_exact_posterior, plot_posterior, bounds=(-10, 10))
+            posterior_plot.savefig(_run.observers[0].dir + "\\posterior_plot.png")
