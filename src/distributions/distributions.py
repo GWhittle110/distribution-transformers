@@ -48,7 +48,7 @@ class GaussianMixtureModel(MixtureSameFamily):
             scale_tril: torch.Tensor of lower triangular representation of scale matrix, i.e. Cholesky decomposition of
                 covariance matrix. Must have positive diagonal elements.
         """
-        super().__init__(Categorical(weights, *args, **kwargs),
+        super().__init__(Categorical(weights, *args, **kwargs, validate_args=False),
                          Independent(MultivariateNormal(loc,
                                                         covariance_matrix=covariance_matrix,
                                                         precision_matrix=precision_matrix,
@@ -730,7 +730,8 @@ class ScaleGaussianObservationModel(ObservationModel):
             x: State to condition sample on. Can be batched or not.
 
         """
-        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation: x.unsqueeze(-1)})
+        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation:
+                                                                x.unsqueeze(-1).unsqueeze(-1)})
 
     @lazy_property
     def loc(self):
@@ -817,7 +818,7 @@ class CompleteDistribution(Distribution):
         x = self.prior(**phi_decoded).sample()
         self.observation_model.condition_(x)
         z = self.observation_model.sample()
-        return torch.cat([phi, x, z], dim=-1)
+        return torch.cat([phi, x.unsqueeze(-1), z], dim=-1)
 
     def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
         """

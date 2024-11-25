@@ -5,6 +5,7 @@ n_components: 20
 observation_size: 1
 n_test_priors: 1000
 n_kl_samples: 10000
+use_distribution_converter: True
 
 observation_loc: [0]
 

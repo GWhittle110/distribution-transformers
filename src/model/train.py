@@ -15,9 +15,9 @@ from distributions.distributions import CompleteDistribution
 from model.utils import get_openai_lr, get_cosine_schedule_with_warmup, torch_nanmean
 
 
-def train(model: TransformerModel, complete_distribution: CompleteDistribution, epochs: int = 100,
-          warmup_epochs: int = 10, steps_per_epoch: int = 100, batch_size: int = 1000, lr: float = None,
-          weight_decay: float = 0.01, scheduler: type[LRScheduler] = None, gpu_device: str = "cuda:0",
+def train(model: TransformerModel, complete_distribution: CompleteDistribution,
+          epochs: int = 100, warmup_epochs: int = 10, steps_per_epoch: int = 100, batch_size: int = 1000,
+          lr: float = None, weight_decay: float = 0.01, scheduler: type[LRScheduler] = None, gpu_device: str = "cuda:0",
           compute_prior_loss: bool = False, verbose: bool = False, progress_bar: bool = False
           ) -> tuple[TransformerModel, dict]:
     """
@@ -72,6 +72,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
         total_loss = 0.
         total_prior_loss = 0.
         total_forward_time = 0.
+        total_conversion_time = 0.
         total_step_time = 0.
         nan_steps = 0.
         tqdm_iter = tqdm(range(steps_per_epoch), desc='Training Epoch') if progress_bar else None
@@ -85,11 +86,24 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             full_data_decoded = complete_distribution.decode_sample(full_data)
             targets = full_data_decoded["x"].to(device)
             before_forward = time.time()
-            phi_out = model(full_data_decoded["phi"].to(device), full_data_decoded["z"].to(device))
-            forward_time = time.time() - before_forward
-            phi_out_decoded = complete_distribution.meta_prior.decode_sample(phi_out)
-            losses = -complete_distribution.meta_prior.prior(**phi_out_decoded).log_prob(targets)
+            if model.distribution_converter is None:
+                conversion_time = 0
+                phi_out = model(full_data_decoded["phi"].to(device), full_data_decoded["z"].to(device))
+                forward_time = time.time() - before_forward
+                phi_out_decoded = complete_distribution.meta_prior.decode_sample(phi_out)
+                losses = -complete_distribution.meta_prior.prior(**phi_out_decoded).log_prob(targets)
+            else:
+                phi_in = model.distribution_converter(full_data_decoded["phi"].to(device))
+                conversion_time = time.time()-before_forward
+                phi_out = model(phi_in, full_data_decoded["z"].to(device))
+                forward_time = time.time() - before_forward - conversion_time
+                phi_in_decoded = model.mixture_reshaper.decode_sample(phi_in)
+                phi_out_decoded = model.mixture_reshaper.decode_sample(phi_out)
+                targets = model.distribution_converter.transform(targets)
+                losses = (-model.mixture_reshaper.distribution(**phi_in_decoded).log_prob(targets)
+                          - model.mixture_reshaper.distribution(**phi_out_decoded).log_prob(targets))
             loss, nan_share = torch_nanmean(losses, return_nanshare=True)
+            """
             if compute_prior_loss and mean_prior_loss is None:
                 with torch.no_grad():
                     prior_losses = -complete_distribution.meta_prior.prior(
@@ -97,6 +111,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
                                                                          )).log_prob(targets)
                     prior_loss = torch_nanmean(prior_losses, return_nanshare=False)
                     total_prior_loss += prior_loss.cpu().item()
+            """
             nan_steps += nan_share.cpu().item()
             optimizer.zero_grad()
             loss.backward()
@@ -105,6 +120,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
 
             total_loss += loss.cpu().item()
             total_forward_time += forward_time
+            total_conversion_time += conversion_time
             total_step_time += step_time
 
             if tqdm_iter:
@@ -121,6 +137,7 @@ def train(model: TransformerModel, complete_distribution: CompleteDistribution, 
             "epoch_load_time": time_to_get_epoch,
             "epoch_time": time.time() - before_get_batch,
             "mean_forward_time": total_forward_time / steps_per_epoch,
+            "mean_conversion_time": total_conversion_time / steps_per_epoch,
             "mean_step_time": total_step_time / steps_per_epoch,
             "nan_share": nan_steps / steps_per_epoch,
         }, mean_prior_loss

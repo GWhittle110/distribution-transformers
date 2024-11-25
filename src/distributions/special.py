@@ -85,7 +85,6 @@ def distribution_to_gmm(p: Distribution, n_components: int,
 
 class ApproximateWarpedGMMMetaPrior(MetaPrior):
     arg_constraints = {}
-    has_rsample = True
 
     def __init__(self, meta_prior: MetaPrior, n_components: int,
                  transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,

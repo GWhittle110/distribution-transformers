@@ -6,10 +6,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from typing import Union, Callable
+from typing import Union, Callable, Optional
 
-from model.components import Cholesky, PositiveDefinite, Logit
-from model.distribution_embeddings import GaussianEmbedding
+from model.components import Cholesky, PositiveDefinite, Logit, MixtureReshaper, GMMReshaper
+from model.distribution_converter import DistributionConverter
+from model.distribution_embeddings import DistributionEmbedding, GaussianEmbedding
 
 
 class TransformerModel(nn.Module):
@@ -17,11 +18,11 @@ class TransformerModel(nn.Module):
     Abstract base class of transformer models
     """
 
-    def forward(self, phi: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def forward(self, phi_in: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of transformer model.
         Args:
-            phi: Batched prior parameter Tensor of form [weights | locs | scales]
+            phi_in: Batched prior parameter Tensor of form [weights | locs | scales]
             z: Batched observation Tensor
 
         Returns:
@@ -113,9 +114,12 @@ class GMMTransformerModel(TransformerModel):
 
 class GMMConditionalTransformerModel(TransformerModel):
     def __init__(self, n_components: int, state_size: int, n_observations: int, d_model: int, n_head: int,
-                 scale_parametrisation: str = None, num_encoder_layers: int = 6, num_decoder_layers: int = 6,
-                 dim_feedforward: int = None, dropout: float = 0.,
-                 activation: Union[str, Callable[[torch.Tensor], torch.Tensor]] = F.gelu, **kwargs):
+                 scale_parametrisation: Optional[str] = None, num_encoder_layers: int = 6, num_decoder_layers: int = 6,
+                 dim_feedforward: int = Optional[None], dropout: float = 0.,
+                 activation: Union[str, Callable[[torch.Tensor], torch.Tensor]] = F.gelu,
+                 mixture_reshaper: Optional[MixtureReshaper] = None,
+                 distribution_converter: Optional[DistributionConverter] = None,
+                 component_embedding: Optional[DistributionEmbedding] = None, **kwargs):
         """
         Conditional Transformer model for dealing with Gaussian mixture model priors and posteriors.
         Treats the Gaussian mixture model as a permutation-invariant sequence of (weight, Gaussian density) pairs,
@@ -140,6 +144,12 @@ class GMMConditionalTransformerModel(TransformerModel):
                 Defaults to 0.
             activation: Activation function of feedforward network model. "relu", "gelu" or a callable.
                 Defaults to "gelu".
+            mixture_reshaper: Reshaper from flat mixture representation to sequence mixture representation.
+                Defaults to GMMReshaper with logit weights.
+            distribution_converter: Converter from arbitrary parametric distribution to mixture model.
+                Defaults to None.
+            component_embedding: Embedding model from sequential mixture model representation to latent space.
+                Defaults to a Gaussian embedding with one hidden layer.
             **kwargs: Additional keyword arguments for the transformer encoder and decoder layers.
         """
         super().__init__()
@@ -152,15 +162,6 @@ class GMMConditionalTransformerModel(TransformerModel):
         self.nhead = n_head
         self.weight_transform = Logit()
         dim_feedforward = 4 * d_model if dim_feedforward is None else dim_feedforward
-
-        self.gaussian_embedding = GaussianEmbedding(state_size=state_size,
-                                                    d_model=d_model,
-                                                    hidden_layer_sizes=[d_model // 2])
-        self.observation_embedding = nn.Sequential(nn.Linear(self.n_observations, d_model // 2),
-                                                   nn.GELU(),
-                                                   nn.Linear(d_model // 2, d_model),
-                                                   nn.GELU(),
-                                                   nn.Linear(d_model, d_model))
 
         transformer_encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, dim_feedforward=dim_feedforward,
                                                                dropout=dropout, activation=activation,
@@ -176,27 +177,40 @@ class GMMConditionalTransformerModel(TransformerModel):
 
         self.init_weights(use_encoder)
 
+        self.mixture_reshaper = GMMReshaper(n_components=n_components, state_size=state_size, logit_weights=True) \
+            if mixture_reshaper is None else mixture_reshaper
+
+        self.distribution_converter = distribution_converter
+
+        self.component_embedding = GaussianEmbedding(state_size=state_size,
+                                                     d_model=d_model,
+                                                     hidden_layer_sizes=[d_model // 2]) \
+            if component_embedding is None else component_embedding
+
+        self.observation_embedding = nn.Sequential(nn.Linear(self.n_observations, d_model // 2),
+                                                   nn.GELU(),
+                                                   nn.Linear(d_model // 2, d_model),
+                                                   nn.GELU(),
+                                                   nn.Linear(d_model, d_model))
+
     def forward(self, phi_in: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        batch_shape = phi_in.shape[:-1]
-        phi_in_w = self.weight_transform(phi_in[..., :self.n_components])    # Move to logit space
-        phi_in_w = phi_in_w.reshape(batch_shape + (self.n_components, 1))
-        phi_in_mu = phi_in[..., self.n_components:self.n_components + self.state_size * self.n_components]
-        phi_in_mu = phi_in_mu.reshape(batch_shape + (self.n_components, self.state_size))
-        phi_in_scale = phi_in[..., -self.state_size ** 2 * self.n_components:]
-        phi_in_scale = phi_in_scale.reshape(batch_shape + (self.n_components, self.state_size ** 2))
-        phi_in = torch.cat([phi_in_w, phi_in_mu, phi_in_scale], dim=-1)
-        phi_in_embedded = self.gaussian_embedding(phi_in)
+        """
+        Forward pass of transformer model.
+        Args:
+            phi_in: Batched prior parameter Tensor of form [weights | locs | scales]
+            z: Batched observation Tensor
+
+        Returns:
+            Posterior parameter Tensor.
+
+        """
+        phi_in_mixed = self.mixture_reshaper(phi_in)
+        phi_in_embedded = self.component_embedding(phi_in_mixed)
         z_embedded = self.observation_embedding(z).unsqueeze(-2)
         encoder_output = self.transformer_encoder(z_embedded)
         decoder_output = self.transformer_decoder(phi_in_embedded, encoder_output, tgt_is_causal=False)
-        phi_out_raw = self.gaussian_embedding(decoder_output, reverse=True)
-        phi_out_w_raw = phi_out_raw[..., :, 0].reshape(batch_shape + (self.n_components,))
-        phi_out_w = F.softmax(phi_out_w_raw, dim=-1)
-        phi_out_mu = phi_out_raw[..., 1:1 + self.state_size].reshape(batch_shape +
-                                                                     (self.n_components * self.state_size,))
-        phi_out_scale = phi_out_raw[..., -self.state_size ** 2:].reshape(batch_shape +
-                                                                         (self.n_components * self.state_size ** 2,))
-        phi_out = torch.cat([phi_out_w, phi_out_mu, phi_out_scale], dim=-1)
+        phi_out_raw = self.component_embedding(decoder_output, reverse=True)
+        phi_out = self.mixture_reshaper(phi_out_raw, reverse=True)
         return phi_out
 
     def init_weights(self, use_encoder: bool):
