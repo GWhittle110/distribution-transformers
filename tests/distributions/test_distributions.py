@@ -8,37 +8,37 @@ from distributions.distributions import (GaussianMixtureModel, GaussianMixtureMo
                                          MetaPrior)
 
 
-@pytest.mark.parametrize(
-    ("weights", "loc", "scale_parametrisation", "scale", "sample_shape", "expected_result"),
-    [
-        (
-            torch.ones(3) / 3,
-            torch.zeros(3, 2, dtype=torch.float32),
-            "covariance_matrix",
-            torch.eye(2, dtype=torch.float32).broadcast_to(3, 2, 2),
-            (1,),
-            (1, 2)
-        ),
-        (
-            torch.ones(5) / 5,
-            torch.zeros(5, 6, dtype=torch.float32),
-            "precision_matrix",
-            torch.eye(6, dtype=torch.float32).broadcast_to(5, 6, 6),
-            (3, 4),
-            (3, 4, 6)
-        ),
-        (
-            torch.ones(1),
-            torch.zeros(1, 1, dtype=torch.float32),
-            "scale_tril",
-            torch.eye(1, dtype=torch.float32).broadcast_to(1, 1, 1),
-            (1, 1),
-            (1, 1, 1)
-        )
-    ]
-)
 class TestGaussianMixtureModel:
 
+    @pytest.mark.parametrize(
+        ("weights", "loc", "scale_parametrisation", "scale", "sample_shape", "expected_result"),
+        [
+            (
+                    torch.ones(3) / 3,
+                    torch.zeros(3, 2, dtype=torch.float32),
+                    "covariance_matrix",
+                    torch.eye(2, dtype=torch.float32).broadcast_to(3, 2, 2),
+                    (1,),
+                    (1, 2)
+            ),
+            (
+                    torch.ones(5) / 5,
+                    torch.zeros(5, 6, dtype=torch.float32),
+                    "precision_matrix",
+                    torch.eye(6, dtype=torch.float32).broadcast_to(5, 6, 6),
+                    (3, 4),
+                    (3, 4, 6)
+            ),
+            (
+                    torch.ones(1),
+                    torch.zeros(1, 1, dtype=torch.float32),
+                    "scale_tril",
+                    torch.eye(1, dtype=torch.float32).broadcast_to(1, 1, 1),
+                    (1, 1),
+                    (1, 1, 1)
+            )
+        ]
+    )
     def test_sample(self, weights: torch.Tensor, loc: torch.Tensor, scale_parametrisation: str, scale: torch.Tensor,
                     sample_shape: _size, expected_result: _size):
         gmm = GaussianMixtureModel(weights, loc, **{scale_parametrisation: scale})
@@ -100,7 +100,7 @@ class TestGaussianMixtureModelConjugatePrior:
                 4,
                 2,
                 (3, 4),
-                (3, 4, 28)
+                (3, 4, 4, 7)
             ),
             (
                 torch.ones(3) / 3,
@@ -115,7 +115,7 @@ class TestGaussianMixtureModelConjugatePrior:
                 10,
                 10,
                 (3, 4),
-                (3, 4, 39)
+                (3, 4, 3, 13)
             ),
             (
                 torch.ones(5) / 5,
@@ -130,7 +130,7 @@ class TestGaussianMixtureModelConjugatePrior:
                 10,
                 10,
                 (3, 4),
-                (3, 4, 65)
+                (3, 4, 5, 13)
             ),
         ]
     )
@@ -376,28 +376,33 @@ def meta_prior():
 
 @pytest.fixture
 def observation_model():
-    return DirectGaussianObservationModel(covariance_matrix=torch.eye(2, dtype=torch.float32))
+    return {"obs": DirectGaussianObservationModel(covariance_matrix=torch.eye(2, dtype=torch.float32))}
 
 
 class TestCompleteDistribution:
 
     @pytest.mark.parametrize(
-        ("sample_shape", "expected_shape"),
+        ("sample_shape", "expected_phi_shape", "expected_x_shape", "expected_z_shape"),
         [
             (
                 torch.Size(),
-                (25,)
+                (3, 7),
+                (2,),
+                {"obs": (2,)}
             ),
             (
                 (5, 10),
-                (5, 10, 25)
+                (5, 10, 3, 7),
+                (5, 10, 2),
+                {"obs": (5, 10, 2)}
             )
 
         ]
     )
-    def test_sample(self, meta_prior: MetaPrior, observation_model: ObservationModel, sample_shape: _size,
-                    expected_shape: _size):
-        complete_distribution = CompleteDistribution(meta_prior, observation_model)
-        sample = complete_distribution.sample(sample_shape)
-        assert sample.shape == expected_shape
-        assert torch.equal(complete_distribution.encode_sample(complete_distribution.decode_sample(sample)), sample)
+    def test_sample(self, meta_prior: MetaPrior, observation_model: dict[str, ObservationModel], sample_shape: _size,
+                    expected_phi_shape: _size, expected_x_shape: _size, expected_z_shape: dict[str, _size]):
+        complete_distribution = CompleteDistribution(meta_prior, **observation_model)
+        phi, x, z = complete_distribution.sample(sample_shape)
+        assert phi.shape == expected_phi_shape
+        assert x.shape == expected_x_shape
+        assert all([z[key].shape == expected_z_shape[key] for key in z])

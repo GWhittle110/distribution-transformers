@@ -4,11 +4,10 @@ Utility functions
 
 import math
 
-import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 
-from model.transformers import TransformerModel
+from model.distribution_transformer import DistributionTransformer
 
 
 # copied from huggingface
@@ -29,14 +28,6 @@ def get_cosine_schedule_with_warmup(optimizer: Optimizer, num_warmup_steps: int,
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
-def get_openai_lr(transformer_model: TransformerModel):
+def get_openai_lr(transformer_model: DistributionTransformer):
     num_params = sum(p.numel() for p in transformer_model.parameters())
     return 0.003239 - 0.0001395 * math.log(num_params)
-
-
-def torch_nanmean(x, dim=0, return_nanshare=False):
-    num = torch.where(torch.isnan(x), torch.full_like(x, 0), torch.full_like(x, 1)).sum(dim=dim)
-    value = torch.where(torch.isnan(x), torch.full_like(x, 0), x).sum(dim=dim)
-    if return_nanshare:
-        return value / num, 1.-num/x.shape[dim]
-    return value / num

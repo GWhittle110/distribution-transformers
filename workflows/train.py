@@ -1,0 +1,210 @@
+"""
+Main training routine for distribution transformer models
+"""
+import torch
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LRScheduler
+from torch.nn.attention import SDPBackend, sdpa_kernel
+
+from tqdm import tqdm
+import time
+import itertools
+from typing import TypedDict, Optional, NotRequired
+from os import makedirs
+
+from model.distribution_transformer import DistributionTransformer
+from distributions.distributions import CompleteDistribution, GaussianMixtureModel
+from distributions.utils import decode_gmm_sample
+from workflows.utils import get_openai_lr, get_cosine_schedule_with_warmup
+
+
+class TrainKwargs(TypedDict):
+    epochs: NotRequired[int]
+    warmup_epochs: NotRequired[int]
+    steps_per_epoch: NotRequired[int]
+    batch_size: NotRequired[int]
+    lr: NotRequired[Optional[float]]
+    weight_decay: NotRequired[float]
+    scheduler: NotRequired[Optional[type[LRScheduler]]]
+    gpu_device: NotRequired[str]
+    verbose: NotRequired[bool]
+    progress_bar: NotRequired[bool]
+    save_interval: NotRequired[int]
+    save_loss_series: NotRequired[bool]
+
+
+def train(model: DistributionTransformer,
+          complete_distribution: CompleteDistribution,
+          epochs: int = 100,
+          warmup_epochs: int = 10,
+          steps_per_epoch: int = 100,
+          batch_size: int = 1000,
+          lr: Optional[float] = None,
+          weight_decay: float = 0.01,
+          scheduler: Optional[type[LRScheduler]] = None,
+          gpu_device: str = "cuda:0",
+          verbose: bool = True,
+          progress_bar: bool = True,
+          save_interval: Optional[int] = -1,
+          save_loss_series: bool = True,
+          _run=None
+          ) -> tuple[DistributionTransformer, dict]:
+    """
+    Training routine for variational transformers. Note that a validation set is not necessary here as the model will
+    see each datapoint only once, so overfitting is impossible and a reduction in train error corresponds to an
+    improvement to the model.
+
+    Args:
+        model: Model to train.
+        complete_distribution: Complete data distribution to sample from.
+        epochs: Number of epochs.
+            Defaults to 100.
+        warmup_epochs: Number of epochs for warmup phase of lr scheduler.
+            Defaults to 10.
+        steps_per_epoch: Number of batches per epoch.
+            Defaults to 100.
+        batch_size: Number of samples per batch.
+            Defaults to 200.
+        lr: Learning rate.
+            Defaults to the OpenAI method of determining learning rate.
+        weight_decay: Weight decay.
+            Defaults to 0.01.
+        scheduler: Learning rate scheduler.
+            Defaults to cosine annealing with warmup.
+        gpu_device: GPU device.
+            Defaults to "cuda:0".
+        verbose: Whether to display metrics during training.
+            Defaults to False.
+        progress_bar: Whether to display a progress bar during training.
+            Defaults to False.
+        save_interval: How frequently to save model weights in units of epochs.
+            Defaults to -1, ie save last epoch only.
+        save_loss_series: Whether to save loss series.
+            Defaults to True.
+        _run: Sacred run object.
+
+    Returns:
+        Trained model.
+
+    """
+    before_training = time.time()
+    assert save_interval == -1 or save_interval is None or (save_interval > 0 and isinstance(save_interval, int)), \
+        "save_interval must be None (for no saving), -1 (for final epoch saving only) or a strictly positive int"
+
+    device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+    print(f'Using {device} device')
+    device = torch.device(device)
+    model.to(device)
+
+    if lr is None:
+        lr = get_openai_lr(model) if lr is None else lr
+        print(f"Using OpenAI max lr of {lr}")
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_epochs, epochs)\
+        if scheduler is None else scheduler(optimizer)
+
+    prior_loss_series = []
+    posterior_loss_series = []
+
+    def train_epoch() -> dict:
+        model.train()
+        total_posterior_loss = 0.
+        total_prior_loss = 0.
+        total_forward_time = 0.
+        total_step_time = 0.
+        epoch_prior_loss_series = []
+        epoch_posterior_loss_series = []
+        tqdm_iter = tqdm(range(steps_per_epoch), desc='Training Epoch') if progress_bar else None
+
+        before_get_batch = time.time()
+        complete_data_sample = complete_distribution.sample((steps_per_epoch, batch_size))
+        z = complete_data_sample[2]
+        time_to_get_epoch = time.time() - before_get_batch
+
+        for batch, (phi, x) in enumerate(zip(*complete_data_sample[:2])):
+            tqdm_iter.update() if tqdm_iter is not None else None
+            observations = {key: obs[batch].to(device) for key, obs in z.items()}
+            before_forward = time.time()
+            phi_in, phi_out = model(phi.to(device), **observations)
+            forward_time = time.time() - before_forward
+            targets = x.reshape(batch_size, decode_gmm_sample(phi_in)["loc"].shape[-1]).to(device)
+            prior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_in)
+                                                 ).log_prob(model.sample_space_transform(targets))
+            prior_loss = torch.nanmean(prior_losses)
+            posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_out)
+                                                     ).log_prob(model.sample_space_transform(targets))
+            posterior_loss = torch.nanmean(posterior_losses)
+            total_loss = prior_loss + posterior_loss
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            step_time = time.time() - before_forward
+
+            total_prior_loss += prior_loss.cpu().item()
+            total_posterior_loss += posterior_loss.cpu().item()
+            total_forward_time += forward_time
+            total_step_time += step_time
+            epoch_prior_loss_series.append(prior_loss.cpu().item())
+            epoch_posterior_loss_series.append(posterior_loss.cpu().item())
+
+            if tqdm_iter:
+                postfix_dict = {'step time': step_time,
+                                'mean prior loss': total_prior_loss / (batch + 1),
+                                'mean posterior loss': total_posterior_loss / (batch + 1)}
+                tqdm_iter.set_postfix(postfix_dict)
+
+        return {
+            "mean_prior_loss": total_prior_loss / steps_per_epoch,
+            "mean_posterior_loss": total_posterior_loss / steps_per_epoch,
+            "epoch_load_time": time_to_get_epoch,
+            "epoch_time": time.time() - before_get_batch,
+            "mean_forward_time": total_forward_time / steps_per_epoch,
+            "mean_step_time": total_step_time / steps_per_epoch,
+            "epoch_prior_loss_series": epoch_prior_loss_series,
+            "epoch_posterior_loss_series": epoch_posterior_loss_series
+        }
+
+    for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
+        epoch_start_time = time.time()
+        try:
+            with sdpa_kernel(SDPBackend.MATH):
+                epoch_metrics = train_epoch()
+        except Exception as e:
+            print("Invalid epoch encountered, skipping...")
+            raise e
+
+        if save_interval is not None and save_interval != -1 and save_interval % epoch == 0 and _run is not None:
+            path = _run.observers[0].dir+"\\state_dicts\\"
+            makedirs(path, exist_ok=True)
+            torch.save(model.state_dict(), path + f"model_state_dict_{epoch}.pt")
+
+        prior_loss_series.append(epoch_metrics["epoch_prior_loss_series"])
+        posterior_loss_series.append(epoch_metrics["epoch_posterior_loss_series"])
+
+        if verbose:
+            print('\n' + '-' * 179)
+            print(
+                f'| end of epoch {epoch:3d} | time: {(time.time() - epoch_start_time):5.2f}s '
+                f'| lr {scheduler.get_last_lr()[0]:5.6f} '
+                f'| data time {epoch_metrics["epoch_load_time"]:5.2f} | epoch time {epoch_metrics["epoch_time"]:5.2f} '
+                f'| forward time {epoch_metrics["mean_forward_time"]:5.5f} '
+                f'| step time {epoch_metrics["mean_step_time"]:5.2f} '
+                f'| mean prior loss {epoch_metrics["mean_prior_loss"]:5.2f} '
+                f'| mean posterior loss {epoch_metrics["mean_posterior_loss"]:5.2f} |')
+            print('-' * 179)
+
+        scheduler.step()
+
+    if save_interval is not None and _run is not None:
+        torch.save(model.state_dict(), _run.observers[0].dir + f"\\state_dicts\\model_state_dict.pt")
+
+    if save_loss_series and _run is not None:
+        _run.info["epoch_prior_loss_series"] = prior_loss_series
+        _run.info["epoch_posterior_loss_series"] = posterior_loss_series
+
+    if _run is not None:
+        _run.info["final_training_metrices"] = epoch_metrics
+        _run.info["training_time"] = time.time() - before_training
+
+    model.eval()
+    return model.cpu(), epoch_metrics

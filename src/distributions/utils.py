@@ -3,91 +3,56 @@ Utility functions for distributions
 """
 
 import torch
-from torch.distributions import Distribution, MultivariateNormal, InverseGamma, Normal
+from torch import Tensor
+from torch.distributions import Distribution, InverseGamma, Normal
 from torch.func import vmap, jacrev
+
+from math import sqrt
 from typing import Optional, Callable
 import matplotlib.pyplot as plt
 
-from distributions.distributions import GaussianMixtureModel, LinearGaussianObservationModel
 
-
-def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
-                                                    observation_model: LinearGaussianObservationModel,
-                                                    observations: torch.Tensor
-                                                    ) -> GaussianMixtureModel:
+def decode_gmm_sample(sample: Tensor, scale_parametrisation: str = "covariance_matrix"):
     """
-    Given a Gaussian mixture model prior, a linear Gaussian observation model, and a set of observations, return the
-    analytical posterior; another Gaussian mixture model.
+    Decode a sequence representation GMM sample into a dict of parameters.
 
     Args:
-        prior: Prior Gaussian mixture model.
-        observation_model: Linear Gaussian observation model.
-        observations: Tensor of observations.
+        sample: Sequence representation GMM.
+        scale_parametrisation: Parametrisation used for scale parameter. Must be one of "covariance_matrix",
+            "precision_matrix" or "scale_tril".
+            Defaults to "covariance_matrix".
 
     Returns:
-        Posterior Gaussian mixture model.
+        Dict representation GMM.
 
     """
-    device = prior.loc.device
+    state_size = int(sqrt(sample.shape[-1]))
+    weights = sample[..., 0]
+    loc = sample[..., 1:state_size+1]
+    scale = sample[..., -state_size ** 2:].reshape(*sample.shape[:-1], state_size, state_size)
+    return {"weights": weights, "loc": loc, scale_parametrisation: scale}
 
-    match prior.scale_parametrisation:
-        case "covariance_matrix":
-            prior_covariance_matrix = prior.covariance_matrix
-        case "precision_matrix":
-            prior_covariance_matrix = torch.linalg.inv(prior.precision_matrix)
-        case "scale_tril":
-            prior_covariance_matrix = torch.einsum("...ij,...kj->...ik", prior.scale_tril, prior.scale_tril)
-        case _:
-            raise ValueError
 
-    match observation_model.scale_parametrisation:
-        case "covariance_matrix":
-            observation_covariance_matrix = observation_model.covariance_matrix
-        case "precision_matrix":
-            observation_covariance_matrix = torch.linalg.inv(observation_model.precision_matrix)
-        case "scale_tril":
-            observation_covariance_matrix = torch.einsum("...ij,...kj->...ik", observation_model.scale_tril,
-                                                         observation_model.scale_tril)
-        case _:
-            raise ValueError
+def encode_gmm_sample(sample: dict[str, Tensor], scale_parametrisation: str = "covariance_matrix"):
+    """
+    Encode a parameter dict representation GMM sample as a sequence representation.
 
-    observation_matrix = observation_model.observation_matrix.to(device)
+    Args:
+        sample: Dict representation GMM.
+        scale_parametrisation: Parametrisation used for scale parameter. Must be one of "covariance_matrix",
+            "precision_matrix" or "scale_tril".
+            Defaults to "covariance_matrix".
 
-    schur_marginal_term = torch.einsum("ij,...jk,lk->...il", observation_matrix, prior_covariance_matrix,
-                                       observation_matrix) + observation_covariance_matrix.to(device)
-    schur_marginal_term = (schur_marginal_term.to(torch.float64) +
-                           torch.transpose(schur_marginal_term.to(torch.float64), dim0=-2, dim1=-1)) / 2
-    schur_marginal_term = schur_marginal_term.to(torch.float32)
-    schur_inverse_term = torch.linalg.inv(schur_marginal_term)
-    schur_covariance_term = torch.einsum("...ij,kj->...ik", prior_covariance_matrix, observation_matrix)
-    observation_marginal_mean = torch.einsum("ij,...j->...i", observation_matrix, prior.loc)
-    observations = observations.unsqueeze(-2)
-    residual_term = observations - observation_marginal_mean
+    Returns:
+        Sequence representation GMM.
 
-    posterior_loc = prior.loc + torch.einsum("...ij,...jk,...k->...i", schur_covariance_term, schur_inverse_term,
-                                             residual_term)
-
-    posterior_covariance_matrix = prior_covariance_matrix - torch.einsum("...ij,...jk,...lk->...il",
-                                                                         schur_covariance_term, schur_inverse_term,
-                                                                         schur_covariance_term)
-    posterior_covariance_matrix = (posterior_covariance_matrix.to(torch.float64) +
-                                   torch.transpose(posterior_covariance_matrix.to(torch.float64), dim0=-2, dim1=-1)) / 2
-    posterior_covariance_matrix = posterior_covariance_matrix.to(torch.float32)
-
-    observation_component_marginals = MultivariateNormal(loc=observation_marginal_mean,
-                                                         covariance_matrix=schur_marginal_term)
-    observation_component_evidences = torch.exp(observation_component_marginals.log_prob(observations))
-
-    posterior_weights = prior.weights * observation_component_evidences
-    posterior_weights /= posterior_weights.sum(dim=-1).unsqueeze(-1)
-
-    posterior = GaussianMixtureModel(weights=posterior_weights, loc=posterior_loc,
-                                     covariance_matrix=posterior_covariance_matrix, validate_args=False)
-    return posterior
+    """
+    return torch.cat([sample["weights"].unsqueeze(-1), sample["loc"], sample[scale_parametrisation].flatten(-2)],
+                     dim=-1)
 
 
 def kl_divergence(p: Distribution, q: Distribution,
-                  q_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+                  q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                   n_samples: int = 100000):
     """
     Compute a stochastic approximation to KL[p||q]
@@ -131,7 +96,7 @@ def kl_divergence(p: Distribution, q: Distribution,
 
 
 def plot_distributions(p: Distribution, q: Optional[Distribution] = None,
-                       q_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+                       q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        bounds: tuple[float, float] = (-5., 5.),
                        n_points: int = 1000) -> plt.Figure:
     """
@@ -139,7 +104,7 @@ def plot_distributions(p: Distribution, q: Optional[Distribution] = None,
 
     Example:
         >>> p = InverseGamma(1, 1)
-        >>> q = GaussianMixtureModel(weights=torch.ones(1), loc=torch.zeros(1, 1), scale_tril=torch.ones(1, 1, 1))
+        >>> q = Normal(0, 1)
         >>> plot_distributions(p, q, torch.log, (0.01, 5))
 
     Args:
@@ -155,8 +120,6 @@ def plot_distributions(p: Distribution, q: Optional[Distribution] = None,
     """
     points = torch.linspace(*bounds, steps=n_points)
     p_density = p.log_prob(points.reshape((n_points,) + p.event_shape)).exp()
-    if len(p.batch_shape) != 0:
-        p_density = p_density[0]
     fig, ax = plt.subplots()
     ax.plot(points, p_density)
 

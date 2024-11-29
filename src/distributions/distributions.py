@@ -3,11 +3,15 @@ Custom distributions used by the model for meta-priors, priors, likelihoods and 
 """
 
 import torch
+from torch import Tensor
 from torch.distributions import (Distribution, Wishart, MultivariateNormal, Independent, Categorical,
                                  MixtureSameFamily, Dirichlet, InverseGamma, constraints)
 from torch.distributions.utils import lazy_property
 from torch.types import _size
+
 from typing import Optional, Callable
+
+from distributions.utils import decode_gmm_sample, encode_gmm_sample
 
 
 class GaussianMixtureModel(MixtureSameFamily):
@@ -20,9 +24,12 @@ class GaussianMixtureModel(MixtureSameFamily):
     }
     support = constraints.real_vector
 
-    def __init__(self, weights: torch.Tensor, loc: torch.Tensor, covariance_matrix: Optional[torch.Tensor] = None,
-                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None,
-                 *args, **kwargs):
+    def __init__(self, weights: Tensor,
+                 loc: Tensor,
+                 covariance_matrix: Optional[Tensor] = None,
+                 precision_matrix: Optional[Tensor] = None,
+                 scale_tril: Optional[Tensor] = None,
+                 validate_args: bool = True):
         """
         Gaussian Mixture Model distribution. Supports sampling with different parameters in dimension 0.
 
@@ -42,20 +49,21 @@ class GaussianMixtureModel(MixtureSameFamily):
 
         Args:
             weights: Weighting of each mixture component. Must all be positive and sum to 1.
-            loc: torch.Tensor of means of each mixture component.
+            loc: Tensor of means of each mixture component.
             covariance_matrix: Tensor of covariance matrices of each mixture component. Must all be positive definite.
             precision_matrix:  Tensor of precision matrices of each mixture component. Must all be positive definite.
-            scale_tril: torch.Tensor of lower triangular representation of scale matrix, i.e. Cholesky decomposition of
+            scale_tril: Tensor of lower triangular representation of scale matrix, i.e. Cholesky decomposition of
                 covariance matrix. Must have positive diagonal elements.
+            validate_args: Whether to validate model parameters obey constraints.
         """
-        super().__init__(Categorical(weights, *args, **kwargs, validate_args=False),
+        super().__init__(Categorical(weights, validate_args=False),
                          Independent(MultivariateNormal(loc,
                                                         covariance_matrix=covariance_matrix,
                                                         precision_matrix=precision_matrix,
                                                         scale_tril=scale_tril,
-                                                        *args, **kwargs),
+                                                        validate_args=validate_args),
                                      0),
-                         *args, **kwargs)
+                         validate_args=validate_args)
         self.weights = weights
         self.loc = loc
         self.covariance_matrix = covariance_matrix
@@ -123,7 +131,7 @@ class MetaPrior(Distribution):
         self.prior = prior
         self.prior_size: Optional[int] = None
 
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
+    def decode_sample(self, sample: Tensor) -> dict[str, Tensor]:
         """
         Decode tensor of sampled parameters to dictionary of tensors keyed by parameter.
 
@@ -135,7 +143,7 @@ class MetaPrior(Distribution):
         """
         raise NotImplementedError
 
-    def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
+    def encode_sample(self, decoded_sample: dict[str, Tensor]) -> Tensor:
         """
         Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
@@ -165,19 +173,19 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
     has_rsample = True
 
     def __init__(self,
-                 weights_concentration: Optional[torch.Tensor] = None,
-                 loc_loc: Optional[torch.Tensor] = None,
-                 loc_covariance_matrix: Optional[torch.Tensor] = None,
-                 loc_precision_matrix: Optional[torch.Tensor] = None,
-                 loc_scale_tril: Optional[torch.Tensor] = None,
+                 weights_concentration: Optional[Tensor] = None,
+                 loc_loc: Optional[Tensor] = None,
+                 loc_covariance_matrix: Optional[Tensor] = None,
+                 loc_precision_matrix: Optional[Tensor] = None,
+                 loc_scale_tril: Optional[Tensor] = None,
                  scale_parametrisation: Optional[str] = None,
-                 scale_df: Optional[torch.Tensor] = None,
-                 scale_covariance_matrix: Optional[torch.Tensor] = None,
-                 scale_precision_matrix: Optional[torch.Tensor] = None,
-                 scale_scale_tril: Optional[torch.Tensor] = None,
+                 scale_df: Optional[Tensor] = None,
+                 scale_covariance_matrix: Optional[Tensor] = None,
+                 scale_precision_matrix: Optional[Tensor] = None,
+                 scale_scale_tril: Optional[Tensor] = None,
                  scale_eps: Optional[float] = None,
                  n_components: Optional[int] = None,
-                 state_size: Optional[int] = None,
+                 state_size: Optional[int] = None
                  ):
         """
         Meta-prior for a Gaussian Mixture Model. Uses conjugate priors for all parameters. Each parameter is referred to
@@ -250,7 +258,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         self.scale_eps = 1e-6 if scale_eps is None else scale_eps
         self.prior_size = self.n_components * (1 + self.state_size + self.state_size ** 2)
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
+    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
         weights = Dirichlet(self.weights_concentration).sample(sample_shape)
         loc = Independent(MultivariateNormal(self.loc_loc,
                                              covariance_matrix=self.loc_covariance_matrix,
@@ -274,11 +282,12 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             case _:
                 raise AssertionError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
                                      '"scale_tril"')
-        return torch.cat([weights, loc.flatten(start_dim=-2), scale.flatten(start_dim=-3)], dim=-1)
+        return torch.cat([weights.unsqueeze(-1), loc, scale.flatten(start_dim=-2)], dim=-1)
 
-    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+    def log_prob(self, value: Tensor) -> Tensor:
         """
         Calculate the logarithm of the probability density function evaluated at the input value.
+
         Args:
             value: Value to query probability density function.
 
@@ -286,6 +295,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             Log probability of value.
 
         """
+        batch_shape = value.shape[:-2]
         params_dict = self.decode_sample(value)
 
         match self.scale_parametrisation:
@@ -300,8 +310,8 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             case _:
                 raise AssertionError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
                                      '"scale_tril"')
-        loc = params_dict["loc"].reshape(value.shape[:-1] + (self.n_components, self.state_size))
-        precision_matrix = precision_matrix.reshape(value.shape[:-1] + (self.n_components, self.state_size,
+        loc = params_dict["loc"].reshape(batch_shape + (self.n_components, self.state_size))
+        precision_matrix = precision_matrix.reshape(batch_shape + (self.n_components, self.state_size,
                                                                         self.state_size))
         return (Dirichlet(self.weights_concentration).log_prob(params_dict["weights"]) +
                 Independent(MultivariateNormal(self.loc_loc,
@@ -315,7 +325,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
                                     scale_tril=self.scale_scale_tril
                                     ), 1).log_prob(precision_matrix))
 
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
+    def decode_sample(self, sample: Tensor) -> dict[str, Tensor]:
         """
         Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
 
@@ -324,21 +334,11 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
 
         Returns:
             Decoded sample.
-        """
-        sample_shape = sample.shape[:-1]
-        weights = sample[..., :self.n_components]
-        loc = sample[..., self.n_components:self.n_components*(1+self.state_size)].reshape(*sample_shape,
-                                                                                           self.n_components,
-                                                                                           self.state_size)
-        scale = sample[..., self.n_components*(1+self.state_size):].reshape(*sample_shape,
-                                                                            self.n_components,
-                                                                            self.state_size,
-                                                                            self.state_size)
-        return {"weights": weights,
-                "loc": loc,
-                self.scale_parametrisation: scale}
 
-    def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        return decode_gmm_sample(sample, self.scale_parametrisation)
+
+    def encode_sample(self, decoded_sample: dict[str, Tensor]) -> Tensor:
         """
         Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
@@ -347,11 +347,9 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
 
         Returns:
             Tensor encoding sample.
+
         """
-        weights = decoded_sample["weights"]
-        loc = decoded_sample["loc"]
-        scale = decoded_sample[self.scale_parametrisation]
-        return torch.cat([weights, loc.flatten(start_dim=-2), scale.flatten(start_dim=-3)], dim=-1)
+        return encode_gmm_sample(decoded_sample, self.scale_parametrisation)
 
     @lazy_property
     def weights_concentration(self):
@@ -405,7 +403,9 @@ class InverseGammaMetaPrior(MetaPrior):
     }
     has_rsample = True
 
-    def __init__(self, concentration_concentration: float = 1, concentration_rate: float = 1,
+    def __init__(self,
+                 concentration_concentration: float = 1,
+                 concentration_rate: float = 1,
                  rate_concentration: int = 1, rate_rate: int = 1):
         """
         Meta prior for an inverse gamma distribution.
@@ -426,12 +426,12 @@ class InverseGammaMetaPrior(MetaPrior):
 
         self.prior_size = 2
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
+    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
         concentration = InverseGamma(self.concentration_concentration, self.concentration_rate).sample(sample_shape)
         rate = InverseGamma(self.rate_concentration, self.rate_rate).sample(sample_shape)
         return torch.stack([concentration, rate], dim=-1)
 
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
+    def decode_sample(self, sample: Tensor) -> dict[str, Tensor]:
         """
         Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
 
@@ -446,7 +446,7 @@ class InverseGammaMetaPrior(MetaPrior):
         return {"concentration": concentration,
                 "rate": rate}
 
-    def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
+    def encode_sample(self, decoded_sample: dict[str, Tensor]) -> Tensor:
         """
         Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
 
@@ -481,7 +481,7 @@ class ObservationModel(Distribution):
         self.n_observations: Optional[int] = None
         self.mapping = torch.nn.Identity()
 
-    def condition_(self, x: torch.Tensor):
+    def condition_(self, x: Tensor):
         """
         Condition observation distribution on state.
         Args:
@@ -489,7 +489,7 @@ class ObservationModel(Distribution):
 
         """
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
+    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
         return self.distribution.sample(sample_shape=sample_shape)
 
 
@@ -500,8 +500,10 @@ class DirectGaussianObservationModel(ObservationModel):
         "scale_tril": constraints.lower_cholesky,
     }
 
-    def __init__(self, covariance_matrix: Optional[torch.Tensor] = None,
-                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
+    def __init__(self,
+                 covariance_matrix: Optional[Tensor] = None,
+                 precision_matrix: Optional[Tensor] = None,
+                 scale_tril: Optional[Tensor] = None):
         """
         Observation model for direction observation of state subject to Gaussian noise.
 
@@ -563,7 +565,7 @@ class DirectGaussianObservationModel(ObservationModel):
         self.precision_matrix = precision_matrix
         self.scale_tril = scale_tril
 
-    def condition_(self, x: torch.Tensor):
+    def condition_(self, x: Tensor):
         """
         Condition observation distribution on state.
         Args:
@@ -593,9 +595,11 @@ class MappedGaussianObservationModel(DirectGaussianObservationModel):
         "scale_tril": constraints.lower_cholesky,
     }
 
-    def __init__(self, covariance_matrix: Optional[torch.Tensor] = None,
-                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None,
-                 mapping: Optional[Callable[[torch.Tensor], torch.Tensor]] = None):
+    def __init__(self,
+                 covariance_matrix: Optional[Tensor] = None,
+                 precision_matrix: Optional[Tensor] = None,
+                 scale_tril: Optional[Tensor] = None,
+                 mapping: Optional[Callable[[Tensor], Tensor]] = None):
         """
         Observation model for observation of mapping of state subject to Gaussian noise.
 
@@ -626,7 +630,7 @@ class MappedGaussianObservationModel(DirectGaussianObservationModel):
         super().__init__(covariance_matrix, precision_matrix, scale_tril)
         self.mapping = torch.nn.Identity() if mapping is None else mapping
 
-    def condition_(self, x: torch.Tensor):
+    def condition_(self, x: Tensor):
         super().condition_(self.mapping(x))
 
 
@@ -637,8 +641,10 @@ class LinearGaussianObservationModel(MappedGaussianObservationModel):
         "scale_tril": constraints.lower_cholesky,
     }
 
-    def __init__(self, observation_matrix: torch.Tensor = None, covariance_matrix: Optional[torch.Tensor] = None,
-                 precision_matrix: Optional[torch.Tensor] = None, scale_tril: Optional[torch.Tensor] = None):
+    def __init__(self,
+                 observation_matrix: Tensor = None,
+                 covariance_matrix: Optional[Tensor] = None,
+                 precision_matrix: Optional[Tensor] = None, scale_tril: Optional[Tensor] = None):
         """
         Observation model for observation of mapping of state subject to Gaussian noise.
 
@@ -692,7 +698,9 @@ class ScaleGaussianObservationModel(ObservationModel):
         "loc": constraints.real_vector
     }
 
-    def __init__(self, loc: torch.Tensor, scale_parametrisation: Optional[str] = None):
+    def __init__(self,
+                 loc: Tensor,
+                 scale_parametrisation: Optional[str] = None):
         """
         Observation model for observing state via its parametrisation of a Gaussian's scale parameter.
 
@@ -723,7 +731,7 @@ class ScaleGaussianObservationModel(ObservationModel):
         self.n_observations = loc.shape[-1]
         self.scale_parametrisation = "covariance_matrix" if scale_parametrisation is None else scale_parametrisation
 
-    def condition_(self, x: torch.Tensor):
+    def condition_(self, x: Tensor):
         """
         Condition observation distribution on state.
         Args:
@@ -740,8 +748,10 @@ class ScaleGaussianObservationModel(ObservationModel):
 
 class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
 
-    def __init__(self, loc: torch.Tensor, scale_parametrisation: Optional[str] = None,
-                 mapping: Optional[Callable[[torch.Tensor], torch.Tensor]] = None):
+    def __init__(self,
+                 loc: Tensor,
+                 scale_parametrisation: Optional[str] = None,
+                 mapping: Optional[Callable[[Tensor], Tensor]] = None):
         """
         Observation model for observing state via its parametrisation of a Gaussian's scale parameter.
 
@@ -768,7 +778,7 @@ class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
         super().__init__(loc=loc, scale_parametrisation=scale_parametrisation)
         self.mapping = torch.nn.Identity() if mapping is None else mapping
 
-    def condition_(self, x: torch.Tensor):
+    def condition_(self, x: Tensor):
         """
         Condition observation distribution on state.
         Args:
@@ -780,10 +790,11 @@ class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
 
 
 class CompleteDistribution(Distribution):
-    has_rsample = True
     _validate_args = False
 
-    def __init__(self, meta_prior: MetaPrior, observation_model: ObservationModel):
+    def __init__(self,
+                 meta_prior: MetaPrior,
+                 **observation_model: ObservationModel):
         """
         Complete distribution over prior, state and observation, p(phi, x, z). We implicitly decompose this
         hierarchically as p(phi) p(x|phi) p(z|x).
@@ -791,16 +802,16 @@ class CompleteDistribution(Distribution):
         Example - no batching:
             >>> meta_prior = GaussianMixtureModelConjugateMetaPrior(n_components=4, state_size=2)
             >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
-            >>> observation_model = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
-            >>> complete_distribution = CompleteDistribution(meta_prior, observation_model)
+            >>> observation_model = {"obs_1": DirectGaussianObservationModel(covariance_matrix=covariance_matrix)}
+            >>> complete_distribution = CompleteDistribution(meta_prior, **observation_model)
             >>> print(complete_distribution.sample())
 
         Example - batching:
             >>> meta_prior = GaussianMixtureModelConjugateMetaPrior(n_components=4, state_size=2)
             >>> covariance_matrix = torch.eye(2, dtype=torch.float32)
-            >>> observation_model = DirectGaussianObservationModel(covariance_matrix=covariance_matrix)
-            >>> complete_distribution = CompleteDistribution(meta_prior, observation_model)
-            >>> print(complete_distribution.sample((5, 10)))
+            >>> observation_model = {"obs_1": DirectGaussianObservationModel(covariance_matrix=covariance_matrix)}
+            >>> complete_distribution = CompleteDistribution(meta_prior, **observation_model)
+            >>> print(complete_distribution.sample((2, 2)))
 
         Args:
             meta_prior: Meta-prior distribution, p(phi).
@@ -810,46 +821,21 @@ class CompleteDistribution(Distribution):
         super().__init__()
         self.meta_prior = meta_prior
         self.prior = meta_prior.prior
-        self.observation_model = observation_model
+        self.observation_model: dict[str, ObservationModel] = observation_model
+        self.prior_sample: Optional[Tensor] = None
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
-        phi = self.meta_prior.sample(sample_shape)
+    def sample(self,
+               sample_shape: _size = torch.Size(),
+               cache_prior: bool = False
+               ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
+        if not cache_prior or self.prior_sample is None:
+            phi = self.meta_prior.sample(sample_shape)
+            self.prior_sample = phi
+        else:
+            phi = self.prior_sample
         phi_decoded = self.meta_prior.decode_sample(phi)
         x = self.prior(**phi_decoded).sample()
-        self.observation_model.condition_(x)
-        z = self.observation_model.sample()
-        return torch.cat([phi, x.unsqueeze(-1), z], dim=-1)
-
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
-        """
-        Decode tensor of sampled parameters to dictionary of tensors keyed on prior parameters phi, state x and
-        observations z.
-
-        Args:
-            sample: Sampled tensor.
-
-        Returns:
-            Decoded sample.
-        """
-        phi = sample[..., :self.meta_prior.prior_size]
-        x = sample[..., self.meta_prior.prior_size:-self.observation_model.n_observations]
-        z = sample[..., -self.observation_model.n_observations:]
-        return {"phi": phi,
-                "x": x,
-                "z": z}
-
-    @staticmethod
-    def encode_sample(decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
-
-        Args:
-            decoded_sample:  Dictionary of decoded sample.
-
-        Returns:
-            Tensor encoding sample.
-        """
-        phi = decoded_sample["phi"]
-        x = decoded_sample["x"]
-        z = decoded_sample["z"]
-        return torch.cat([phi, x, z], dim=-1)
+        for observation_model in self.observation_model.values():
+            observation_model.condition_(x)
+        z = {key: observation_model.sample() for key, observation_model in self.observation_model.items()}
+        return phi, x, z

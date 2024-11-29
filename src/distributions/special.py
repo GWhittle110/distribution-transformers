@@ -3,21 +3,20 @@ Special methods and classes operating on distributions
 """
 
 import torch
-from torch.distributions import Distribution, Wishart
-from torch.types import _size
+from torch import Tensor
+from torch.distributions import Distribution, Wishart, MultivariateNormal
+
 from typing import Optional, Callable
 from sklearn.mixture import GaussianMixture
 from functools import partial
 
-from distributions.distributions import (GaussianMixtureModel, MetaPrior, InverseGammaMetaPrior, ObservationModel,
-                                         CompleteDistribution)
-from distributions.utils import kl_divergence
+from distributions.distributions import (GaussianMixtureModel, LinearGaussianObservationModel)
 
 
 def distribution_to_gmm(p: Distribution, n_components: int,
-                        transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+                        transform: Optional[Callable[[Tensor], Tensor]] = None,
                         n_samples: int = 1000, scale_parametrisation: str = "covariance_matrix",
-                        *args, **kwargs) -> torch.Tensor:
+                        *args, **kwargs) -> Tensor:
     """
     Approximate an arbitrary distribution p with a Gaussian mixture model with a specified number of components.
     Samples n_samples from p and fits the GMM using Expectation Maximisation.
@@ -77,184 +76,85 @@ def distribution_to_gmm(p: Distribution, n_components: int,
             case _:
                 raise ValueError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
                                  '"scale_tril')
-        return torch.hstack([weights.flatten(), loc.flatten(), scale.flatten()])
+        return torch.cat([weights.unsqueeze(-1), loc, scale.flatten(-2)], dim=-1)
 
-    phi = torch.cat([inner(sample) for sample in samples]).to(device)
-    return phi.reshape(p.batch_shape + (-1,))
-
-
-class ApproximateWarpedGMMMetaPrior(MetaPrior):
-    arg_constraints = {}
-
-    def __init__(self, meta_prior: MetaPrior, n_components: int,
-                 transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-                 scale_parametrisation: str = "covariance_matrix",
-                 cache_samples: bool = True):
-        """
-        Wrapper around a MetaPrior instance which approximates sampled priors with GMMs.
-
-        Example:
-            >>> meta_prior = InverseGammaMetaPrior()
-            >>> wrapped_meta_prior = ApproximateWarpedGMMMetaPrior(meta_prior, 4, transform=torch.log)
-            >>> print(wrapped_meta_prior.sample((10, 10)))
-            >>> print(wrapped_meta_prior.exact_prior_samples)
-            >>> p = meta_prior.prior(**meta_prior.decode_sample(wrapped_meta_prior.exact_prior_samples))
-            >>> q = GaussianMixtureModel(**wrapped_meta_prior.decode_sample(wrapped_meta_prior.approximate_prior_samples))
-            >>> print(kl_divergence(p, q, lambda x: torch.log(x.unsqueeze(-1))))
-
-        Args:
-            meta_prior: Wrapped MetaPrior instance.
-            n_components: Number of components in approximating GMM.
-            transform: Transform from meta_prior's sample space to GMM sample space.
-                Defaults to None.
-            scale_parametrisation: Parametrisation of GMM scale parameter. Must be one of "covariance_matrix",
-                "precision_matrix" or "scale_tril".
-                Defaults to "covariance_matrix".
-            cache_samples: Whether to store sampled priors after first sampling. Useful for training.
-                Defaults to True.
-
-        """
-        super().__init__(GaussianMixtureModel)
-        self.meta_prior = meta_prior
-        self.n_components = n_components
-        self.transform = transform
-        self.scale_parametrisation = scale_parametrisation
-        self.cache_prior = cache_samples
-
-        self.approximate_prior_samples: Optional[torch.Tensor] = None
-        self.exact_prior_samples: Optional[torch.Tensor] = None
-
-        assert scale_parametrisation in {"covariance_matrix", "precision_matrix", "scale_tril"}, \
-            'scale_parametrisation must be one of "covariance_matrix", "precision_matrix", or "scale_tril".'
-
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
-        if (not self.cache_prior or self.approximate_prior_samples is None
-                or self.approximate_prior_samples.shape[:-1] != sample_shape):
-            prior = self.meta_prior.sample(sample_shape)
-            if prior.shape == sample_shape:
-                prior.unsqueeze(-1)
-            decoded_prior = self.meta_prior.decode_sample(prior)
-            approximate_prior = distribution_to_gmm(self.meta_prior.prior(**decoded_prior),
-                                                    n_components=self.n_components,
-                                                    transform=self.transform)
-
-            self.exact_prior_samples = prior
-            self.approximate_prior_samples = approximate_prior
-            self.prior_size = self.approximate_prior_samples.shape[-1]
-
-        return self.approximate_prior_samples
-
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
-        """
-        Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
-
-        Args:
-            sample: Sampled tensor.
-
-        Returns:
-            Decoded sample.
-        """
-        sample_shape = sample.shape[:-1]
-        weights = sample[..., :self.n_components]
-        loc = sample[..., self.n_components:self.n_components * 2].reshape(*sample_shape, self.n_components, 1)
-        scale = sample[..., -self.n_components:].reshape(*sample_shape, self.n_components, 1, 1)
-        return {"weights": weights,
-                "loc": loc,
-                "covariance_matrix": scale}
-
-    def encode_sample(self, decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
-
-        Args:
-            decoded_sample:  Dictionary of decoded sample.
-
-        Returns:
-            Tensor encoding sample.
-        """
-        weights = decoded_sample["weights"]
-        loc = decoded_sample["loc"]
-        scale = decoded_sample["covariance_matrix"]
-        return torch.cat([weights, loc.flatten(start_dim=-2), scale.flatten(start_dim=-3)], dim=-1)
+    phi = torch.cat([inner(sample) for sample in samples], dim=-1).to(device)
+    return phi.reshape(*p.batch_shape, n_components, -1)
 
 
-class ApproximateCompleteDistribution(CompleteDistribution):
-    has_rsample = True
-    _validate_args = False
+def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
+                                                    observation_model: LinearGaussianObservationModel,
+                                                    observations: Tensor,
+                                                    device: str = "cuda:0"
+                                                    ) -> GaussianMixtureModel:
+    """
+    Given a Gaussian mixture model prior, a linear Gaussian observation model, and a set of observations, return the
+    analytical posterior; another Gaussian mixture model.
 
-    def __init__(self, meta_prior: ApproximateWarpedGMMMetaPrior, observation_model: ObservationModel,
-                 sample_mode: str = "exact"):
-        """
-        Complete distribution over prior, state and observation, p(phi, x, z). We implicitly decompose this
-        hierarchically as p(phi) p(x|phi) p(z|x). Extended class to work with GMM-approximating warped meta-priors.
+    Args:
+        prior: Prior Gaussian mixture model.
+        observation_model: Linear Gaussian observation model.
+        observations: Tensor of observations.
+        device: CUDA device.
+            Defaults to "cuda:0".
 
-        Args:
-            meta_prior: Meta-prior distribution, p(phi).
-            observation_model: Observation model, p(z|x).
-                to the transformed meta-prior.
-            sample_mode: Whether to sample x from "exact" prior or approximate "prior".
-                Defaults to "approximate".
+    Returns:
+        Posterior Gaussian mixture model.
 
-        """
-        super().__init__(meta_prior, observation_model)
-        self.meta_prior: ApproximateWarpedGMMMetaPrior = meta_prior
-        self.exact_meta_prior = meta_prior.meta_prior
-        self.exact_prior = meta_prior.meta_prior.prior
-        self.prior_transform = meta_prior.transform
-        self.observation_model = observation_model
-        self.sample_mode = sample_mode
+    """
+    device = device if torch.cuda.is_available() else "cpu"
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> torch.Tensor:
-        phi = self.meta_prior.sample(sample_shape)
-        phi_decoded = self.meta_prior.decode_sample(phi)
-        prior = self.prior(**phi_decoded)
-        match self.sample_mode:
-            case "approximate":
-                x = prior.sample()
-            case "exact":
-                exact_phi_decoded = self.exact_meta_prior.decode_sample(self.meta_prior.exact_prior_samples)
-                x = self.exact_prior(**exact_phi_decoded).sample()
-                x = self.prior_transform(x).reshape(prior.batch_shape + prior.event_shape)
-            case _:
-                raise ValueError('sample_mode must be one of "approximate" or "exact"')
-        self.observation_model.condition_(x)
-        z = self.observation_model.sample()
-        return torch.cat([phi, x, z], dim=-1)
+    match prior.scale_parametrisation:
+        case "covariance_matrix":
+            prior_covariance_matrix = prior.covariance_matrix
+        case "precision_matrix":
+            prior_covariance_matrix = torch.linalg.inv(prior.precision_matrix)
+        case "scale_tril":
+            prior_covariance_matrix = torch.einsum("...ij,...kj->...ik", prior.scale_tril, prior.scale_tril)
+        case _:
+            raise ValueError
 
-    def set_sample_mode(self, sample_mode):
-        assert sample_mode in {"approximate", "exact"}, 'sample_mode must be one of "approximate" or "exact"'
-        self.sample_mode = sample_mode
+    match observation_model.scale_parametrisation:
+        case "covariance_matrix":
+            observation_covariance_matrix = observation_model.covariance_matrix
+        case "precision_matrix":
+            observation_covariance_matrix = torch.linalg.inv(observation_model.precision_matrix)
+        case "scale_tril":
+            observation_covariance_matrix = torch.einsum("...ij,...kj->...ik", observation_model.scale_tril,
+                                                         observation_model.scale_tril)
+        case _:
+            raise ValueError
 
-    def decode_sample(self, sample: torch.Tensor) -> dict[str, torch.Tensor]:
-        """
-        Decode tensor of sampled parameters to dictionary of tensors keyed on prior parameters phi, state x and
-        observations z.
+    observation_matrix = observation_model.observation_matrix.to(device)
 
-        Args:
-            sample: Sampled tensor.
+    schur_marginal_term = torch.einsum("ij,...jk,lk->...il", observation_matrix, prior_covariance_matrix,
+                                       observation_matrix) + observation_covariance_matrix.to(device)
+    schur_marginal_term = (schur_marginal_term.to(torch.float64) +
+                           torch.transpose(schur_marginal_term.to(torch.float64), dim0=-2, dim1=-1)) / 2
+    schur_marginal_term = schur_marginal_term.to(torch.float32)
+    schur_inverse_term = torch.linalg.inv(schur_marginal_term)
+    schur_covariance_term = torch.einsum("...ij,kj->...ik", prior_covariance_matrix, observation_matrix)
+    observation_marginal_mean = torch.einsum("ij,...j->...i", observation_matrix, prior.loc)
+    observations = observations.unsqueeze(-2)
+    residual_term = observations - observation_marginal_mean
 
-        Returns:
-            Decoded sample.
-        """
-        phi = sample[..., :self.meta_prior.prior_size]
-        x = sample[..., self.meta_prior.prior_size:-self.observation_model.n_observations]
-        z = sample[..., -self.observation_model.n_observations:]
-        return {"phi": phi,
-                "x": x,
-                "z": z}
+    posterior_loc = prior.loc + torch.einsum("...ij,...jk,...k->...i", schur_covariance_term, schur_inverse_term,
+                                             residual_term)
 
-    @staticmethod
-    def encode_sample(decoded_sample: dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
+    posterior_covariance_matrix = prior_covariance_matrix - torch.einsum("...ij,...jk,...lk->...il",
+                                                                         schur_covariance_term, schur_inverse_term,
+                                                                         schur_covariance_term)
+    posterior_covariance_matrix = (posterior_covariance_matrix.to(torch.float64) +
+                                   torch.transpose(posterior_covariance_matrix.to(torch.float64), dim0=-2, dim1=-1)) / 2
+    posterior_covariance_matrix = posterior_covariance_matrix.to(torch.float32)
 
-        Args:
-            decoded_sample:  Dictionary of decoded sample.
+    observation_component_marginals = MultivariateNormal(loc=observation_marginal_mean,
+                                                         covariance_matrix=schur_marginal_term)
+    observation_component_evidences = torch.exp(observation_component_marginals.log_prob(observations))
 
-        Returns:
-            Tensor encoding sample.
-        """
-        phi = decoded_sample["phi"]
-        x = decoded_sample["x"]
-        z = decoded_sample["z"]
-        return torch.cat([phi, x, z], dim=-1)
+    posterior_weights = prior.weights * observation_component_evidences
+    posterior_weights /= posterior_weights.sum(dim=-1).unsqueeze(-1)
+
+    posterior = GaussianMixtureModel(weights=posterior_weights, loc=posterior_loc,
+                                     covariance_matrix=posterior_covariance_matrix, validate_args=False)
+    return posterior

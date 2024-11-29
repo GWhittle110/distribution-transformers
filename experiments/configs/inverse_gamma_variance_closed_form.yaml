@@ -1,32 +1,56 @@
 name: gmm_closed_form
 module_path: "static.toy.inverse_gamma_variance_closed_form"
 
-n_components: 20
-observation_size: 1
-n_test_priors: 1000
-n_kl_samples: 10000
-use_distribution_converter: True
+n_components: 5
 
-observation_loc: [0]
-
-meta_prior_params:
+meta_prior_kwargs:
+  concentration_concentration: 1
   concentration_rate: 1
+  rate_concentration: 1
   rate_rate: 1
 
-transformer_params:
+observation_loc:
+  obs_1: [0]
+
+distribution_embedding_kwargs:
+  embedding_hidden_layer_sizes: [32]
+  embedding_activation: gelu
+  conversion_hidden_layer_sizes: [64]
+  conversion_activation: gelu
+
+component_embedding_kwargs:
+  hidden_layer_sizes: [32]
+  activation: gelu
+  jitter: 0.000001
+  eps: null
+  scale_parametrisation: covariance_matrix
+
+observation_embedding_kwargs:
+  obs_1:
+    hidden_layer_sizes: [32]
+    activation: gelu
+
+transformer_kwargs:
   d_model: 64
   n_head: 8
   dim_feedforward: 2048
-  num_encoder_layers: null
   dropout: 0
+  num_layers: 6
+  activation: gelu
 
-training_params:
-  compute_prior_loss: True
+training_kwargs:
   warmup_epochs: 5
   epochs: 50
-  progress_bar: True
+  steps_per_epoch: 100
+  batch_size: 2000
   lr: 0.001
-  verbose: True
-  batch_size: 1000
-  steps_per_epoch: 50
   weight_decay: 0
+  verbose: True
+  progress_bar: True
+  save_interval: 5
+  save_loss_series: True
+
+testing_kwargs:
+  n_test_priors: 1000
+  n_kl_samples: 10000
+  plot: True,

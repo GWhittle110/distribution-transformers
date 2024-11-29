@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "variational_transformers"
+name = "distribution_transformers"
 authors = [
     {name = "George Whittle", email = "george.whittle@reuben.ox.ac.uk"}
 ]
@@ -29,7 +29,7 @@ dev = [
 
 
 [project.urls]
-Homepage = "https://github.com/GWhittle110/variational-transformers"
+Homepage = "https://github.com/GWhittle110/distribution-transformers"
 
 
 [tools.pytest.ini.options]

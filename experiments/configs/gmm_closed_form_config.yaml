@@ -3,29 +3,49 @@ module_path: "static.toy.gmm_closed_form"
 
 n_components: 10
 state_size: 1
-observation_size: 3
-n_test_priors: 1000
-n_kl_samples: 10000
 
-observation_covariance_matrix: [[1]]
-observation_matrix: [[1]]
-
-meta_prior_params:
+meta_prior_kwargs:
   scale_parametrisation: covariance_matrix
 
-transformer_params:
+observation_covariance_matrix:
+  obs_1: [[1]]
+
+observation_matrix:
+  obs_1: [[1]]
+
+component_embedding_kwargs:
+  hidden_layer_sizes: [32, 48, 64]
+  activation: gelu
+  jitter: 0.000001
+  eps: null
+  scale_parametrisation: covariance_matrix
+
+observation_embedding_kwargs:
+  obs_1:
+    hidden_layer_sizes: [32]
+    activation: gelu
+
+transformer_kwargs:
   d_model: 64
   n_head: 8
   dim_feedforward: 2048
-  num_encoder_layers: null
   dropout: 0
+  num_layers: 6
+  activation: gelu
 
-training_params:
-  compute_prior_loss: True
+training_kwargs:
   warmup_epochs: 5
   epochs: 50
-  progress_bar: True
-  lr: 0.001
-  verbose: True
+  steps_per_epoch: 100
   batch_size: 1000
+  lr: 0.001
   weight_decay: 0
+  verbose: True
+  progress_bar: True
+  save_interval: 5
+  save_loss_series: True
+
+testing_kwargs:
+  n_test_priors: 1000
+  n_kl_samples: 10000
+  plot: True

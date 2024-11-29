@@ -10,18 +10,28 @@ Compute average KL divergence KL[q || p]
 """
 
 import torch
-from time import time
+from torch import Tensor
 
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, LinearGaussianObservationModel,
                                          CompleteDistribution, GaussianMixtureModel)
-from distributions.utils import gmm_with_linear_gaussian_observations_posterior, kl_divergence, plot_distributions
-from model.transformers import GMMConditionalTransformerModel
-from model.train import train
+from distributions.special import gmm_with_linear_gaussian_observations_posterior
+from model.embeddings import ComponentEmbedding, ObservationEmbedding
+from model.distribution_transformer import DistributionTransformer
+from workflows.train import train
+from workflows.test import test_conjugate_prior
 
 
-def run(n_components: int, state_size: int, n_test_priors: int, n_kl_samples: int,
-        meta_prior_params: dict, observation_covariance_matrix: list[list[float]],
-        observation_matrix: list[list[float]], transformer_params: dict, training_params: dict, _run=None,
+def run(n_components: int,
+        state_size: int,
+        meta_prior_kwargs: dict,
+        observation_covariance_matrix: dict[str, list[list[float]]],
+        observation_matrix: dict[str, list[list[float]]],
+        component_embedding_kwargs: dict,
+        observation_embedding_kwargs: dict[str, dict],
+        transformer_kwargs: dict,
+        training_kwargs: dict,
+        testing_kwargs: dict,
+        _run=None,
         *args, **kwargs):
     """
     Run an experiment comparing distribution transformers to the closed form posterior of a GMM prior under linear
@@ -30,79 +40,75 @@ def run(n_components: int, state_size: int, n_test_priors: int, n_kl_samples: in
     Args:
         n_components: Number of GMM components.
         state_size: Dimensionality of GMM.
-        n_test_priors: Number of sampled priors to compare model posterior to closed form posterior on.
-        n_kl_samples: Number of samples with which to compute the KL divergence between posteriors.
-        meta_prior_params: Dictionary of parameters for the meta prior.
-        observation_covariance_matrix: Observation covariance matrix, specified in list of lists format.
-        observation_matrix: Observation matrix, specified in list of lists format.
-        transformer_params: Dictionary of parameters for the transformer model.
-        training_params: Dictionary of parameters for the training routine.
+        meta_prior_kwargs: Dictionary of parameters for the meta prior.
+        observation_covariance_matrix: Dictionary of covariance matrices for gaussian observations.
+        observation_matrix: Dictionary of observation matrices for gaussian observations.
+        component_embedding_kwargs: Dictionary of component embedding parameters.
+        observation_embedding_kwargs: Dictionary of dictionaries of observation embedding parameters.
+        transformer_kwargs: Dictionary of parameters for the transformer model.
+        training_kwargs: Dictionary of parameters for the training routine.
+        testing_kwargs: Dictionary of parameters for the testing routine.
         _run: Sacred run object.
+
+    Returns:
 
     """
 
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
     # Meta-prior
     meta_prior = GaussianMixtureModelConjugateMetaPrior(state_size=state_size, n_components=n_components,
-                                                        **meta_prior_params)
+                                                        **meta_prior_kwargs)
 
     # Observation model
-    covariance_matrix = torch.tensor(observation_covariance_matrix, dtype=torch.float32)
-    observation_matrix = torch.tensor(observation_matrix, dtype=torch.float32)
-    observation_model = LinearGaussianObservationModel(observation_matrix=observation_matrix,
-                                                       covariance_matrix=covariance_matrix)
+    covariance_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
+                              for key, val in observation_covariance_matrix.items()}
+    observation_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
+                               for key, val in observation_matrix.items()}
+    observation_model = {key: LinearGaussianObservationModel(observation_matrix=observation_matrix_dict[key],
+                                                             covariance_matrix=covariance_matrix_dict[key])
+                         for key in covariance_matrix_dict}
 
     # Complete distribution
-    complete_distribution = CompleteDistribution(meta_prior, observation_model)
+    complete_distribution = CompleteDistribution(meta_prior, **observation_model)
 
-    # Variational transformer
-    model = GMMConditionalTransformerModel(n_components=n_components, state_size=state_size,
-                                           n_observations=observation_model.n_observations, **transformer_params)
+    # Distribution transformer
+    d_model = transformer_kwargs["d_model"]
+    component_embedding = ComponentEmbedding(state_size=1, d_model=d_model, **component_embedding_kwargs)
+    observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
+                             for key, kwargs in observation_embedding_kwargs.items()}
+    model = DistributionTransformer(component_embedding=component_embedding,
+                                    transformer_kwargs=transformer_kwargs,
+                                    n_components=n_components,
+                                    prior_embedding=None,
+                                    sample_space_transform=None,
+                                    **observation_embedding)
 
-    before_training = time()
-    model, last_epoch_metrics = train(model, complete_distribution, **training_params)
-    training_time = time() - before_training
-    model.to(device)
+    model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    with torch.no_grad():
-        # Test inputs
-        test_samples = complete_distribution.sample((n_test_priors,)).to(device)
-        test_prior_params = complete_distribution.decode_sample(test_samples)["phi"]
-        test_observations = complete_distribution.decode_sample(test_samples)["z"]
-        test_priors = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params))
+    scale_parametrisation = component_embedding_kwargs["scale_parametrisation"]
 
-        # Exact solution
-        observation_model.observation_matrix = observation_model.observation_matrix.to(device)
-        observation_model.covariance_matrix = observation_model.covariance_matrix.to(device)
-        exact_posterior = gmm_with_linear_gaussian_observations_posterior(test_priors, observation_model,
-                                                                          test_observations)
-        # Inference solution
-        start_time = time()
-        model_posterior_params = model(test_prior_params, test_observations)
-        model_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params))
-        inference_time = time() - start_time
+    def conjugacy_update(phi: dict[str, Tensor],
+                         z: dict[str, Tensor],
+                         device: str
+                         ) -> dict[str, Tensor]:
+        dist = GaussianMixtureModel(**phi)
+        for key in z:
+            dist = gmm_with_linear_gaussian_observations_posterior(dist, observation_model[key], z[key], device)
+        return {
+            "weights": dist.weights,
+            "loc": dist.loc,
+            scale_parametrisation: getattr(dist, scale_parametrisation)
+        }
 
-        kl_divergences = kl_divergence(model_posterior, exact_posterior, n_samples=n_kl_samples)
-        prior_kl_divergences = kl_divergence(test_priors, exact_posterior, n_samples=n_kl_samples)
-        print(f"Model mean KL divergence: {kl_divergences.mean().item()} \n"
-              f"Prior mean KL divergence: {prior_kl_divergences.mean().item()}")
+    def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
+        if scale_parametrisation == "precision_matrix":
+            index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
+            max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
+        else:
+            index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
+            max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
+        max_loc = phi["loc"].max().item()
+        min_loc = phi["loc"].min().item()
+        return min_loc - 4 * max_std, max_loc + 4 * max_std
 
-        _run.info.update({"training_epoch_metrics": last_epoch_metrics,
-                          "training_time": training_time,
-                          "test_inference_time": inference_time,
-                          "model_mean_kl_divergence": kl_divergences.mean().item(),
-                          "prior_mean_kl_divergence": prior_kl_divergences.mean().item(),
-                          "model_std_kl_divergence": kl_divergences.std().item(),
-                          "prior_std_kl_divergence": prior_kl_divergences.std().item()})
-
-        if state_size == 1:
-            plot_prior = GaussianMixtureModel(**meta_prior.decode_sample(test_prior_params[0].cpu()))
-            prior_plot = plot_distributions(plot_prior, bounds=(-10, 10))
-            prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
-
-            plot_exact_posterior = gmm_with_linear_gaussian_observations_posterior(plot_prior, observation_model,
-                                                                                   test_observations[0].cpu())
-            plot_posterior = GaussianMixtureModel(**meta_prior.decode_sample(model_posterior_params[0].cpu()))
-            posterior_plot = plot_distributions(plot_exact_posterior, plot_posterior, bounds=(-10, 10))
-            posterior_plot.savefig(_run.observers[0].dir + "\\posterior_plot.png")
+    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
+                         _run=_run, **testing_kwargs)
