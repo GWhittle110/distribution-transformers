@@ -1,17 +1,15 @@
 name: gmm_closed_form
-module_path: "static.toy.gmm_closed_form"
+module_path: "static.toy.gmm_nonlinear"
 
-n_components: 2
+n_components: 8
 state_size: 1
 
 meta_prior_kwargs:
   scale_parametrisation: covariance_matrix
 
 observation_covariance_matrix:
-  obs_1: [[1]]
-
-observation_matrix:
-  obs_1: [[1]]
+  obs_1: [[10]]
+  obs_2: [[0.01]]
 
 component_embedding_kwargs:
   hidden_layer_sizes: [32]
@@ -22,6 +20,9 @@ component_embedding_kwargs:
 
 observation_embedding_kwargs:
   obs_1:
+    hidden_layer_sizes: [32]
+    activation: gelu
+  obs_2:
     hidden_layer_sizes: [32]
     activation: gelu
 
@@ -35,7 +36,7 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 50
+  epochs: 20
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.001

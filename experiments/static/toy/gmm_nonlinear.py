@@ -1,31 +1,23 @@
 """
-Experiment to validate method against closed form posterior of GMM prior with linear Gaussian observations
+Experiment to test method with multiple nonlinear, but gaussian observations.
 
-Procedure:
-Sample ~10 observation models, state sizes and number of components from some distributions. For each:
-    1) Train the variational transformer
-    2) Sample ~1000 priors and observations as in training and compute posterior using variational transformer and
-        analytical solution.
-Compute average KL divergence KL[q || p]
 """
 
 import torch
 from torch import Tensor
 
-from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, LinearGaussianObservationModel,
+from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, MappedGaussianObservationModel,
                                          CompleteDistribution, GaussianMixtureModel)
-from distributions.special import gmm_with_linear_gaussian_observations_posterior
+from distributions.utils import plot_distributions, decode_gmm_sample
 from model.embeddings import ComponentEmbedding, ObservationEmbedding
 from model.distribution_transformer import DistributionTransformer
 from workflows.train import train
-from workflows.test import test_conjugate_prior
 
 
 def run(n_components: int,
         state_size: int,
         meta_prior_kwargs: dict,
         observation_covariance_matrix: dict[str, list[list[float]]],
-        observation_matrix: dict[str, list[list[float]]],
         component_embedding_kwargs: dict,
         observation_embedding_kwargs: dict[str, dict],
         transformer_kwargs: dict,
@@ -42,7 +34,6 @@ def run(n_components: int,
         state_size: Dimensionality of GMM.
         meta_prior_kwargs: Dictionary of parameters for the meta prior.
         observation_covariance_matrix: Dictionary of covariance matrices for gaussian observations.
-        observation_matrix: Dictionary of observation matrices for gaussian observations.
         component_embedding_kwargs: Dictionary of component embedding parameters.
         observation_embedding_kwargs: Dictionary of dictionaries of observation embedding parameters.
         transformer_kwargs: Dictionary of parameters for the transformer model.
@@ -59,12 +50,14 @@ def run(n_components: int,
                                                         **meta_prior_kwargs)
 
     # Observation model
+    mapping_dict = {
+        "obs_1": lambda x: torch.sum(x ** 2, dim=-1).unsqueeze(-1),
+        "obs_2": lambda x: torch.sinc(3*x)
+    }
     covariance_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
                               for key, val in observation_covariance_matrix.items()}
-    observation_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
-                               for key, val in observation_matrix.items()}
-    observation_model = {key: LinearGaussianObservationModel(observation_matrix=observation_matrix_dict[key],
-                                                             covariance_matrix=covariance_matrix_dict[key])
+    observation_model = {key: MappedGaussianObservationModel(covariance_matrix=covariance_matrix_dict[key],
+                                                             mapping=mapping_dict[key])
                          for key in covariance_matrix_dict}
 
     # Complete distribution
@@ -86,29 +79,24 @@ def run(n_components: int,
 
     scale_parametrisation = component_embedding_kwargs["scale_parametrisation"]
 
-    def conjugacy_update(phi: dict[str, Tensor],
-                         z: dict[str, Tensor],
-                         device: str
-                         ) -> dict[str, Tensor]:
-        dist = GaussianMixtureModel(**phi)
-        for key in z:
-            dist = gmm_with_linear_gaussian_observations_posterior(dist, observation_model[key], z[key], device)
-        return {
-            "weights": dist.weights,
-            "loc": dist.loc,
-            scale_parametrisation: getattr(dist, scale_parametrisation)
-        }
+    with torch.no_grad():
 
-    def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
-        if scale_parametrisation == "precision_matrix":
-            index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
-            max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
-        else:
-            index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
-            max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
-        max_loc = phi["loc"].max().item()
-        min_loc = phi["loc"].min().item()
-        return min_loc - 4 * max_std, max_loc + 4 * max_std
+        phi, x, z = complete_distribution.sample()
+        phi_in, phi_out = model(phi, **z)
+        exact_prior = GaussianMixtureModel(**decode_gmm_sample(phi, scale_parametrisation))
+        prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
-    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
-                         _run=_run, **testing_kwargs)
+        def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
+            if scale_parametrisation == "precision_matrix":
+                index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
+                max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
+            else:
+                index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
+                max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
+            max_loc = phi["loc"].max().item()
+            min_loc = phi["loc"].min().item()
+            return min_loc - 4 * max_std, max_loc + 4 * max_std
+
+        plot_distributions(exact_prior, prior, bounds=bounds_func(decode_gmm_sample(phi, scale_parametrisation)))
+        plot_distributions(posterior, bounds=bounds_func(decode_gmm_sample(phi_out, scale_parametrisation)))
