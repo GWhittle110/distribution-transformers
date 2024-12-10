@@ -1,6 +1,5 @@
 """
 Experiment to test method with multiple nonlinear, but gaussian observations.
-
 """
 
 import torch

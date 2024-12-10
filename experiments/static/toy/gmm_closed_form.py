@@ -1,12 +1,5 @@
 """
 Experiment to validate method against closed form posterior of GMM prior with linear Gaussian observations
-
-Procedure:
-Sample ~10 observation models, state sizes and number of components from some distributions. For each:
-    1) Train the variational transformer
-    2) Sample ~1000 priors and observations as in training and compute posterior using variational transformer and
-        analytical solution.
-Compute average KL divergence KL[q || p]
 """
 
 import torch
