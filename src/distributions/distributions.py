@@ -5,7 +5,7 @@ Custom distributions used by the model for meta-priors, priors, likelihoods and 
 import torch
 from torch import Tensor
 from torch.distributions import (Distribution, Wishart, MultivariateNormal, Independent, Categorical,
-                                 MixtureSameFamily, Dirichlet, InverseGamma, constraints)
+                                 MixtureSameFamily, Dirichlet, InverseGamma, Beta, constraints)
 from torch.distributions.utils import lazy_property
 from torch.types import _size
 
@@ -170,7 +170,6 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         "scale_scale_tril": constraints.lower_cholesky,
         "scale_eps": constraints.greater_than_eq(0)
     }
-    has_rsample = True
 
     def __init__(self,
                  weights_concentration: Optional[Tensor] = None,
@@ -258,7 +257,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
         self.scale_eps = 1e-6 if scale_eps is None else scale_eps
         self.prior_size = self.n_components * (1 + self.state_size + self.state_size ** 2)
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
+    def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         weights = Dirichlet(self.weights_concentration).sample(sample_shape)
         loc = Independent(MultivariateNormal(self.loc_loc,
                                              covariance_matrix=self.loc_covariance_matrix,
@@ -398,15 +397,17 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
 
 class InverseGammaMetaPrior(MetaPrior):
     arg_constraints = {
+        "concentration_concentration": constraints.positive,
         "concentration_rate": constraints.positive,
+        "rate_concentration": constraints.positive,
         "rate_rate": constraints.positive
     }
-    has_rsample = True
 
     def __init__(self,
                  concentration_concentration: float = 1,
                  concentration_rate: float = 1,
-                 rate_concentration: int = 1, rate_rate: int = 1):
+                 rate_concentration: int = 1,
+                 rate_rate: int = 1):
         """
         Meta prior for an inverse gamma distribution.
 
@@ -426,7 +427,7 @@ class InverseGammaMetaPrior(MetaPrior):
 
         self.prior_size = 2
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
+    def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         concentration = InverseGamma(self.concentration_concentration, self.concentration_rate).sample(sample_shape)
         rate = InverseGamma(self.rate_concentration, self.rate_rate).sample(sample_shape)
         return torch.stack([concentration, rate], dim=-1)
@@ -461,16 +462,107 @@ class InverseGammaMetaPrior(MetaPrior):
         return torch.stack([concentration, rate], dim=-1)
 
     @lazy_property
+    def concentration_concentration(self):
+        return self.concentration_concentration
+
+    @lazy_property
     def concentration_rate(self):
         return self.concentration_rate
+
+    @lazy_property
+    def rate_concentration(self):
+        return self.rate_concentration
 
     @lazy_property
     def rate_rate(self):
         return self.rate_rate
 
 
+class BetaMetaPrior(MetaPrior):
+    arg_constraints = {
+        "concentration1_concentration": constraints.positive,
+        "concentration1_rate": constraints.positive,
+        "concentration0_concentration": constraints.positive,
+        "concentration0_rate": constraints.positive
+    }
+
+    def __init__(self,
+                 concentration1_concentration: float = 1,
+                 concentration1_rate: float = 1,
+                 concentration0_concentration: float = 1,
+                 concentration0_rate: float = 1,):
+        """
+        Meta prior for a Beta distribution.
+
+        Args:
+            concentration1_concentration: Concentration parameter for inverse gamma meta-prior of concentration1
+            parameter.
+            concentration1_rate: Rate parameter for gamma meta-prior of concentration1 parameter.
+            concentration0_concentration: Concentration parameter for inverse gamma meta-prior of concentration0
+            parameter.
+            concentration0_rate: Rate parameter for gamma meta-pior of concentration0 parameter.
+
+        """
+        super().__init__(Beta)
+        self.concentration1_concentration = concentration1_concentration
+        self.concentration1_rate = concentration1_rate
+        self.concentration0_concentration = concentration0_concentration
+        self.concentration0_rate = concentration0_rate
+
+        self.prior_size = 2
+
+    def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
+        concentration1 = InverseGamma(self.concentration1_concentration, self.concentration1_rate).sample(sample_shape)
+        concentration0 = InverseGamma(self.concentration0_concentration, self.concentration0_rate).sample(sample_shape)
+        return torch.stack([concentration1, concentration0], dim=-1)
+
+    def decode_sample(self, sample: Tensor) -> dict[str, Tensor]:
+        """
+        Decode tensor of sampled parameters to dictionary of tensors keyed by GMM parameter.
+
+        Args:
+            sample: Sampled tensor.
+
+        Returns:
+            Decoded sample.
+        """
+        concentration1 = sample[..., 0]
+        concentration0 = sample[..., 1]
+        return {"concentration1": concentration1,
+                "concentration0": concentration0}
+
+    def encode_sample(self, decoded_sample: dict[str, Tensor]) -> Tensor:
+        """
+        Encode dictionary of sampled parameters to a singular tensor. Inverse operation of decode_sample.
+
+        Args:
+            decoded_sample:  Dictionary of decoded sample.
+
+        Returns:
+            Tensor encoding sample.
+        """
+        concentration1 = decoded_sample["concentration1"]
+        concentration0 = decoded_sample["concentration0"]
+        return torch.stack([concentration1, concentration0], dim=-1)
+
+    @lazy_property
+    def concentration1_concentration(self):
+        return self.concentration1_concentration
+
+    @lazy_property
+    def concentration1_rate(self):
+        return self.concentration1_rate
+
+    @lazy_property
+    def concentration0_concentration(self):
+        return self.concentration0_concentration
+
+    @lazy_property
+    def concentration0_rate(self):
+        return self.concentration0_rate
+
+
 class ObservationModel(Distribution):
-    has_rsample = True
 
     def __init__(self):
         """
@@ -483,14 +575,18 @@ class ObservationModel(Distribution):
 
     def condition_(self, x: Tensor):
         """
-        Condition observation distribution on state.
+        Condition observation distribution on state in place.
+
         Args:
             x: State to condition sample on. Can be batched or not.
 
         """
 
-    def rsample(self, sample_shape: _size = torch.Size()) -> Tensor:
+    def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         return self.distribution.sample(sample_shape=sample_shape)
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        return self.distribution.log_prob(value)
 
 
 class DirectGaussianObservationModel(ObservationModel):
