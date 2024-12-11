@@ -4,6 +4,7 @@ Utility functions for distributions
 
 import torch
 from torch import Tensor
+from torch.nn import Identity
 from torch.distributions import Distribution, InverseGamma, Normal
 from torch.func import vmap, jacrev
 
@@ -51,7 +52,8 @@ def encode_gmm_sample(sample: dict[str, Tensor], scale_parametrisation: str = "c
                      dim=-1)
 
 
-def kl_divergence(p: Distribution, q: Distribution,
+def kl_divergence(p: Distribution,
+                  q: Distribution,
                   q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                   n_samples: int = 100000):
     """
@@ -95,42 +97,59 @@ def kl_divergence(p: Distribution, q: Distribution,
     return evaluations.nanmean(dim=0)
 
 
-def plot_distributions(p: Distribution, q: Optional[Distribution] = None,
+def plot_distributions(p: Distribution,
+                       q: Optional[Distribution] = None,
+                       p_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        bounds: tuple[float, float] = (-5., 5.),
-                       n_points: int = 1000) -> plt.Figure:
+                       n_points: int = 1000,
+                       n_kl_points: Optional[int] = 10000) -> plt.Figure:
     """
     Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
 
     Example:
         >>> p = InverseGamma(1, 1)
         >>> q = Normal(0, 1)
-        >>> plot_distributions(p, q, torch.log, (0.01, 5))
+        >>> plot_distributions(p, q, lambda x: x**2, torch.log, (0.01, 5))
 
     Args:
         p: First distribution to plot.
         q: Second distribution to plot.
-        q_transform: Transform mapping sample space of p to sample space of q.
+            Defaults to None.
+        p_transform: Transform from plotting space to sample space of p.
+            Defaults to None.
+        q_transform: Transform from plotting space to sample space of q.
+            Defaults to None.
         bounds: Tuple of upper and lower bounds.
+            Defaults to (-5., 5.).
         n_points: Number of points at which to evaluate density. Uniformly distributed in bounds.
+            Defaults to 1000.
+        n_kl_points: Number of points with which to calculate approximate KL divergence.
+            Set to None to ignore calculation.
+            Defaults to 10000.
 
     Returns:
         Figure object.
 
     """
     points = torch.linspace(*bounds, steps=n_points)
-    p_density = p.log_prob(points.reshape((n_points,) + p.event_shape)).exp()
+    if p_transform is None:
+        p_transform = Identity()
+    p_density = torch.exp(p.log_prob(p_transform(points.reshape((n_points,) + p.event_shape)))
+                          + torch.log(vmap(jacrev(p_transform))(points).reshape((-1,) + p.batch_shape)))
     fig, ax = plt.subplots()
     ax.plot(points, p_density)
 
     if q is not None:
         if q_transform is None:
-            q_transform = torch.nn.Identity()
+            q_transform = Identity()
         q_density = torch.exp(q.log_prob(q_transform(points).reshape((n_points,) + q.event_shape))
                               + torch.log(vmap(jacrev(q_transform))(points).reshape((-1,) + p.batch_shape)))
         ax.plot(points, q_density)
         ax.legend(["p", "q"])
-        ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform):5.4f}", (0.6, 0.9), xycoords="axes fraction")
+        if n_kl_points:
+            ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform, n_kl_points):5.4f}",
+                        (0.6, 0.9), xycoords="axes fraction")
 
     ax.set_title("Density plot")
     ax.set_ylabel("Density")
