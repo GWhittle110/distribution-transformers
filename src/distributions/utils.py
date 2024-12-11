@@ -103,7 +103,7 @@ def plot_distributions(p: Distribution,
                        q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        bounds: tuple[float, float] = (-5., 5.),
                        n_points: int = 1000,
-                       n_kl_points: Optional[int] = 10000) -> plt.Figure:
+                       n_kl_samples: Optional[int] = 10000) -> plt.Figure:
     """
     Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
 
@@ -124,7 +124,7 @@ def plot_distributions(p: Distribution,
             Defaults to (-5., 5.).
         n_points: Number of points at which to evaluate density. Uniformly distributed in bounds.
             Defaults to 1000.
-        n_kl_points: Number of points with which to calculate approximate KL divergence.
+        n_kl_samples: Number of points with which to calculate approximate KL divergence.
             Set to None to ignore calculation.
             Defaults to 10000.
 
@@ -147,8 +147,10 @@ def plot_distributions(p: Distribution,
                               + torch.log(vmap(jacrev(q_transform))(points).reshape((-1,) + p.batch_shape)))
         ax.plot(points, q_density)
         ax.legend(["p", "q"])
-        if n_kl_points:
-            ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform, n_kl_points):5.4f}",
+        if n_kl_samples:
+            if p_transform == q_transform:
+                q_transform = Identity()
+            ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform, n_kl_samples):5.4f}",
                         (0.6, 0.9), xycoords="axes fraction")
 
     ax.set_title("Density plot")
