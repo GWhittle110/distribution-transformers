@@ -209,7 +209,7 @@ def test(model: DistributionTransformer,
             # VI solution
             before_vi = time()
             vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                       inverse_transform).to(device)
+                       inverse_transform, **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)

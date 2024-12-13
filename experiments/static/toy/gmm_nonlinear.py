@@ -52,7 +52,7 @@ def run(n_components: int,
     # Observation model
     mapping_dict = {
         "obs_1": lambda x: torch.sum(x ** 2, dim=-1).unsqueeze(-1),
-        "obs_2": lambda x: torch.sinc(3*x)
+        "obs_2": lambda x: torch.sinc(0.5*x)
     }
     covariance_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
                               for key, val in observation_covariance_matrix.items()}

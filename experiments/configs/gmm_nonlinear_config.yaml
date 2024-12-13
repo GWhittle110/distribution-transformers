@@ -50,3 +50,14 @@ testing_kwargs:
   n_test_priors: 1000
   n_kl_samples: 10000
   plot: True
+  competitor_kwargs:
+    vi:
+      lr: 0.01
+      lr_decay: 0.999
+      n_iters: 4000
+      n_samples: 10
+      ewma_gamma: 0.01
+      progress_bar: True
+      initial_logits_std: 1.
+      initial_loc_std: 1.
+      initial_scale_tril_std: 0.1

@@ -23,7 +23,11 @@ class GMMVI(nn.Module):
                  state_size: int,
                  prior: Distribution,
                  likelihood: dict[str, ObservationModel],
-                 inverse_transform: Optional[Callable[[Tensor], Tensor]] = None):
+                 inverse_transform: Optional[Callable[[Tensor], Tensor]] = None,
+                 initial_logits_std: float = 1.,
+                 initial_loc_std: float = 0.01,
+                 initial_scale_tril_std: float = 0.01,
+                 *args, **kwargs):
         """
         Variational inference routine, fitting a Gaussian Mixture Model to the posterior by maximising an unbiased
         estimator of the ELBO.
@@ -35,6 +39,12 @@ class GMMVI(nn.Module):
             likelihood: Dictionary of likelihood distributions / observation models.
             inverse_transform: Transform from sample space of GMM approximation to prior.
                 Defaults to nn.Identity().
+            initial_logits_std: Standard deviation of zero-mean normal logits initialisation.
+                Defaults to 1.
+            initial_loc_std: Standard deviation of zero-mean normal loc element initialisation.
+                Defaults to 0.01.
+            initial_scale_tril_std: Standard deviation of zero-mean normal scale_tril element initialisation.
+                Defaults to 0.01.
 
         """
         super().__init__()
@@ -44,10 +54,10 @@ class GMMVI(nn.Module):
         self.likelihood = likelihood
 
         # Distribution params
-        self.logits = nn.Parameter(torch.randn(*prior.batch_shape, n_components))
-        self.loc = nn.Parameter(0.01 * torch.randn(*prior.batch_shape, n_components, state_size))
-        self.scale_flat = nn.Parameter(0.01 * torch.randn(*prior.batch_shape, n_components,
-                                                          state_size * (state_size + 1) // 2))
+        self.logits = nn.Parameter(initial_logits_std * torch.randn(*prior.batch_shape, n_components))
+        self.loc = nn.Parameter(initial_loc_std * torch.randn(*prior.batch_shape, n_components, state_size))
+        self.scale_flat = nn.Parameter(initial_scale_tril_std * torch.randn(*prior.batch_shape, n_components,
+                                                                            state_size * (state_size + 1) // 2))
 
     def distribution(self) -> GaussianMixtureModel:
         """
@@ -127,8 +137,8 @@ class GMMVI(nn.Module):
             n_iters: int = 10000,
             n_samples: int = 1,
             ewma_gamma: float = 0.01,
-            progress_bar: bool = True
-            ) -> dict[str, Tensor]:
+            progress_bar: bool = True,
+            *args, **kwargs) -> dict[str, Tensor]:
         """
         Fit either prior GMM by minimising KL divergence or posterior GMM by maximising ELBO.
 
