@@ -187,30 +187,3 @@ class GMMVI(nn.Module):
             "loc": distribution.loc,
             "scale": distribution.scale_tril
         }
-
-
-if __name__ == "__main__":
-    from torch.distributions import InverseGamma
-    from distributions.distributions import ScaleGaussianObservationModel
-    from distributions.utils import plot_distributions
-
-    from time import time
-
-
-    n = torch.Size()
-    device = torch.device("cpu:0")
-    prior = InverseGamma(torch.ones(n, device=device), torch.ones(n, device=device))
-    likelihood = {"obs_1": ScaleGaussianObservationModel(loc=torch.ones(*n, 1, device=device))}
-    vi = GMMVI(5, 1, prior, likelihood, inverse_transform=torch.exp).to(device)
-    z = {"obs_1": torch.ones(*n, 1, device=device)}
-    print(vi.prior_loss(100000).mean())
-    t0 = time()
-    vi.fit(z, fit_prior=True, n_samples=1000, lr=0.1, n_iters=10000)
-    print(time()-t0)
-    print(vi.prior_loss(100000).mean())
-    print(vi.distribution().weights)
-    print(vi.distribution().loc)
-    print(vi.distribution().scale_tril)
-    with torch.no_grad():
-        prior = InverseGamma(torch.ones(n), torch.ones(n))
-        plot_distributions(prior, vi.cpu().distribution(), None, torch.log, bounds=(1e-6, 5))
