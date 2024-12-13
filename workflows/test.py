@@ -221,7 +221,7 @@ def test(model: DistributionTransformer,
             vi_nll = -vi.distribution().log_prob(x.reshape(model_posterior.batch_shape
                                                            + model_posterior.event_shape).to(device))
             vi_expected_nll = vi_nll.mean().item()
-            vi_std_nll = vi_nll.mean().item()
+            vi_std_nll = vi_nll.std().item()
             vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
             vi_expected_elbo = vi_elbo.mean().item()
             vi_std_elbo = vi_elbo.std().item()
