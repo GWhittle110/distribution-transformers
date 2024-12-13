@@ -572,6 +572,7 @@ class ObservationModel(Distribution):
         self.distribution: Optional[Distribution] = None
         self.n_observations: Optional[int] = None
         self.mapping = torch.nn.Identity()
+        self.device: torch.device = torch.device("cpu")
 
     def condition_(self, x: Tensor):
         """
@@ -581,12 +582,14 @@ class ObservationModel(Distribution):
             x: State to condition sample on. Can be batched or not.
 
         """
+        raise NotImplementedError
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
-        return self.distribution.sample(sample_shape=sample_shape)
+        return self.distribution.sample(sample_shape=sample_shape).to(self.device)
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
-        return self.distribution.log_prob(value)
+        device = value.device
+        return self.distribution.log_prob(value.cpu()).to(device)
 
 
 class DirectGaussianObservationModel(ObservationModel):
@@ -668,7 +671,8 @@ class DirectGaussianObservationModel(ObservationModel):
             x: State to condition sample on. Can be batched or not.
 
         """
-        self.distribution = MultivariateNormal(loc=x, covariance_matrix=self.covariance_matrix,
+        self.device = x.device
+        self.distribution = MultivariateNormal(loc=x.cpu(), covariance_matrix=self.covariance_matrix,
                                                precision_matrix=self.precision_matrix, scale_tril=self.scale_tril)
 
     @lazy_property
@@ -727,7 +731,9 @@ class MappedGaussianObservationModel(DirectGaussianObservationModel):
         self.mapping = torch.nn.Identity() if mapping is None else mapping
 
     def condition_(self, x: Tensor):
-        super().condition_(self.mapping(x))
+        self.device = x.device
+        self.distribution = MultivariateNormal(loc=self.mapping(x.cpu()), covariance_matrix=self.covariance_matrix,
+                                               precision_matrix=self.precision_matrix, scale_tril=self.scale_tril)
 
 
 class LinearGaussianObservationModel(MappedGaussianObservationModel):
@@ -834,8 +840,9 @@ class ScaleGaussianObservationModel(ObservationModel):
             x: State to condition sample on. Can be batched or not.
 
         """
+        self.device = x.device
         self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation:
-                                                                x.unsqueeze(-1).unsqueeze(-1)})
+                                                                x.cpu().unsqueeze(-1).unsqueeze(-1)})
 
     @lazy_property
     def loc(self):
@@ -881,8 +888,9 @@ class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
             x: State to condition sample on. Can be batched or not.
 
         """
-        x = self.mapping(x)
-        super().condition_(x)
+        self.device = x.device
+        self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation:
+                                                                    self.mapping(x.cpu()).unsqueeze(-1).unsqueeze(-1)})
 
 
 class CompleteDistribution(Distribution):

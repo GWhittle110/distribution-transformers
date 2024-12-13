@@ -53,16 +53,16 @@ class QuantumSystemObservationModel(ObservationModel):
             x: Delta for Hamiltonian.
 
         """
-        self.delta = x.sigmoid().unsqueeze(-1).unsqueeze(-1)
+        self.device = x.device
+        self.delta = x.cpu().sigmoid().unsqueeze(-1).unsqueeze(-1)
 
     def _distribution(self, sample_shape: _size = torch.Size()) -> Bernoulli:
         extended_sample_shape = sample_shape + self.delta.shape[:-2]
-        device = self.delta.device
-        initial_state = self.initial_state_dist.sample(extended_sample_shape).to(device)
+        initial_state = self.initial_state_dist.sample(extended_sample_shape)
         initial_state /= (initial_state.abs() ** 2).sum(dim=-1, keepdim=True).sqrt()
-        t = self.t_dist.sample(extended_sample_shape).reshape(*extended_sample_shape, 1, 1).to(device)
-        sigma_x = self.sigma_x.to(device)
-        sigma_z = self.sigma_z.to(device)
+        t = self.t_dist.sample(extended_sample_shape).reshape(*extended_sample_shape, 1, 1)
+        sigma_x = self.sigma_x
+        sigma_z = self.sigma_z
         hamiltonian = self.delta * sigma_x + (1 - self.delta) * sigma_z
         transition = torch.matrix_exp(-1j * t * hamiltonian)
         state = torch.einsum("...ij,...j->...i", transition, initial_state.to(torch.complex64))
@@ -72,12 +72,13 @@ class QuantumSystemObservationModel(ObservationModel):
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         distribution = self._distribution(sample_shape)
-        return distribution.sample()
+        return distribution.sample().to(self.device)
 
     def log_prob(self, value: torch.Tensor, n_samples: int = 10) -> torch.Tensor:
         # Stochastic approximation
         distribution = self._distribution((n_samples,))
-        return distribution.log_prob(value).logsumexp(dim=0)-torch.tensor(n_samples, device=value.device).log()
+        log_prob = distribution.log_prob(value.cpu()).logsumexp(dim=0) - torch.tensor(n_samples).log()
+        return log_prob.to(value.device)
 
 
 def run(n_components: int,
