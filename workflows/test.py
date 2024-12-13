@@ -75,8 +75,8 @@ def test_conjugate_prior(model: DistributionTransformer,
         posterior_kl_divergence = kl_divergence(exact_posterior, model_posterior, model.sample_space_transform,
                                                 n_kl_samples).mean().item()
 
-        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence}\n"
-              f"Posterior mean KL divergence: {posterior_kl_divergence}\n")
+        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence.mean().item()}\n"
+              f"Posterior mean KL divergence: {posterior_kl_divergence.mean().item()}\n")
 
         # Single problem run
 
