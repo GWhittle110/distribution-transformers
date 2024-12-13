@@ -5,8 +5,11 @@ Experiment to validate method against closed form posterior of GMM prior with li
 import torch
 from torch import Tensor
 
+from functools import partial
+
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, LinearGaussianObservationModel,
                                          CompleteDistribution, GaussianMixtureModel)
+from distributions.utils import gmm_bounds_func
 from distributions.special import gmm_with_linear_gaussian_observations_posterior
 from model.embeddings import ComponentEmbedding, ObservationEmbedding
 from model.distribution_transformer import DistributionTransformer
@@ -92,16 +95,6 @@ def run(n_components: int,
             scale_parametrisation: getattr(dist, scale_parametrisation)
         }
 
-    def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
-        if scale_parametrisation == "precision_matrix":
-            index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
-            max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
-        else:
-            index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
-            max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
-        max_loc = phi["loc"].max().item()
-        min_loc = phi["loc"].min().item()
-        return min_loc - 4 * max_std, max_loc + 4 * max_std
-
-    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
+    test_conjugate_prior(model, complete_distribution, conjugacy_update,
+                         bounds_func=partial(gmm_bounds_func, scale_parametrisation=scale_parametrisation),
                          _run=_run, **testing_kwargs)

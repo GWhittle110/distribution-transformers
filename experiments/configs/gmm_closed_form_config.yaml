@@ -35,7 +35,7 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 50
+  epochs: 10
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.001

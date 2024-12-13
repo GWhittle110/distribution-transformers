@@ -3,14 +3,16 @@ Experiment to test method with multiple nonlinear, but gaussian observations.
 """
 
 import torch
-from torch import Tensor
+
+from functools import partial
 
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, MappedGaussianObservationModel,
-                                         CompleteDistribution, GaussianMixtureModel)
-from distributions.utils import plot_distributions, decode_gmm_sample
+                                         CompleteDistribution)
+from distributions.utils import gmm_bounds_func
 from model.embeddings import ComponentEmbedding, ObservationEmbedding
 from model.distribution_transformer import DistributionTransformer
 from workflows.train import train
+from workflows.test import test
 
 
 def run(n_components: int,
@@ -25,8 +27,7 @@ def run(n_components: int,
         _run=None,
         *args, **kwargs):
     """
-    Run an experiment comparing distribution transformers to the closed form posterior of a GMM prior under linear
-    Gaussian observations.
+    Run an experiment for inferring the system of a nonlinear gmm inference problem.
 
     Args:
         n_components: Number of GMM components.
@@ -76,26 +77,7 @@ def run(n_components: int,
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    scale_parametrisation = component_embedding_kwargs["scale_parametrisation"]
-
-    with torch.no_grad():
-
-        phi, x, z = complete_distribution.sample()
-        phi_in, phi_out = model(phi, **z)
-        exact_prior = GaussianMixtureModel(**decode_gmm_sample(phi, scale_parametrisation))
-        prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
-        posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
-
-        def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
-            if scale_parametrisation == "precision_matrix":
-                index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
-                max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
-            else:
-                index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
-                max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
-            max_loc = phi["loc"].max().item()
-            min_loc = phi["loc"].min().item()
-            return min_loc - 4 * max_std, max_loc + 4 * max_std
-
-        plot_distributions(exact_prior, prior, bounds=bounds_func(decode_gmm_sample(phi, scale_parametrisation)))
-        plot_distributions(posterior, bounds=bounds_func(decode_gmm_sample(phi_out, scale_parametrisation)))
+    test(model, complete_distribution,
+         bounds_func=partial(gmm_bounds_func,
+                             scale_parametrisation=component_embedding_kwargs["scale_parametrisation"]),
+         _run=_run, **testing_kwargs)

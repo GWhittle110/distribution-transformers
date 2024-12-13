@@ -6,6 +6,7 @@ import torch
 from torch import nn, Tensor
 from torch.nn import Identity
 from torch.distributions.utils import vec_to_tril_matrix
+
 from typing import Union, Sequence, Callable, Optional
 
 from model.components import MLP
