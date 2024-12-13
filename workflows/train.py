@@ -203,7 +203,7 @@ def train(model: DistributionTransformer,
         _run.info["epoch_posterior_loss_series"] = posterior_loss_series
 
     if _run is not None:
-        _run.info["final_training_metrices"] = epoch_metrics
+        _run.info["final_training_metrics"] = epoch_metrics
         _run.info["training_time"] = time.time() - before_training
 
     model.eval()

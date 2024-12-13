@@ -51,14 +51,14 @@ def run(n_components: int,
     complete_distribution = CompleteDistribution(meta_prior, **observation_model)
 
     d_model = transformer_kwargs["d_model"]
-    distribution_embedding = GammaEmbedding(d_model=d_model, n_components=n_components, **distribution_embedding_kwargs)
+    prior_embedding = GammaEmbedding(d_model=d_model, n_components=n_components, **distribution_embedding_kwargs)
     component_embedding = ComponentEmbedding(state_size=1, d_model=d_model, **component_embedding_kwargs)
     observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
                              for key, kwargs in observation_embedding_kwargs.items()}
     model = DistributionTransformer(component_embedding=component_embedding,
                                     transformer_kwargs=transformer_kwargs,
                                     n_components=n_components,
-                                    prior_embedding=distribution_embedding,
+                                    prior_embedding=prior_embedding,
                                     sample_space_transform=torch.log,
                                     **observation_embedding)
 
