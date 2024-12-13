@@ -203,7 +203,7 @@ def test(model: DistributionTransformer,
         model_posterior_expected_nll = model_posterior_nll.mean().item()
         model_posterior_std_nll = model_posterior_nll.std().item()
 
-        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence}")
+        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence.mean().item()}")
 
         if "vi" in competitor_kwargs:
             # VI solution
