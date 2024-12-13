@@ -185,5 +185,5 @@ class GMMVI(nn.Module):
         return {
             "weights": distribution.weights,
             "loc": distribution.loc,
-            "scale": distribution.scale_tril
+            "scale_tril": distribution.scale_tril
         }
