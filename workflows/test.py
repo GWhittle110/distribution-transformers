@@ -78,7 +78,7 @@ def test_conjugate_prior(model: DistributionTransformer,
         # Model solution
         start_time = time()
         phi_in, phi_out = model(phi.to(device), **z)
-        inference_time = time() - start_time
+        model_inference_time = time() - start_time
         model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
 
@@ -186,7 +186,7 @@ def test_conjugate_prior(model: DistributionTransformer,
         # Model solution
         start_time = time()
         phi_in, phi_out = model(phi, **z)
-        single_inference_time = time() - start_time
+        model_single_inference_time = time() - start_time
         model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
 
@@ -198,8 +198,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "model_std_posterior_kl_divergence": model_std_posterior_kl_divergence,
                 "model_posterior_expected_nll": model_posterior_expected_nll,
                 "model_posterior_std_nll": model_posterior_std_nll,
-                "inference_time": inference_time,
-                "single_inference_time": single_inference_time,
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
                 "model_size": model_size
             })
         if "vi" in competitor_kwargs:
