@@ -71,7 +71,7 @@ def test_conjugate_prior(model: DistributionTransformer,
 
         # Exact solution
         phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
-        exact_prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
         phi_posterior_dict = conjugacy_update(phi_prior_dict, z, device)
         exact_posterior = complete_distribution.meta_prior.prior(**phi_posterior_dict)
 
@@ -82,7 +82,7 @@ def test_conjugate_prior(model: DistributionTransformer,
         model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
 
-        model_prior_kl_divergence = kl_divergence(exact_prior, model_prior, model.sample_space_transform,
+        model_prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
                                                   n_kl_samples)
         model_expected_prior_kl_divergence = model_prior_kl_divergence.mean().item()
         model_std_prior_kl_divergence = model_prior_kl_divergence.std().item()
@@ -90,6 +90,17 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                       n_kl_samples)
         model_expected_posterior_kl_divergence = model_posterior_kl_divergence.mean().item()
         model_std_posterior_kl_divergence = model_posterior_kl_divergence.std().item()
+
+        model_posterior_nll = -model_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(model_posterior.batch_shape
+                                                                 + model_posterior.event_shape).to(device))
+        model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape).to(device)
+                                             ).reshape(*prior.batch_shape, 1, 1))
+        model_posterior_expected_nll = model_posterior_nll.mean().item()
+        model_posterior_std_nll = model_posterior_nll.std().item()
+
+
 
         model_size = get_model_size(model)
 
@@ -99,7 +110,7 @@ def test_conjugate_prior(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = GMMVI(model.n_components, model.state_size, exact_prior, complete_distribution.observation_model,
+            vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
                        inverse_transform, **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
@@ -110,8 +121,12 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                        n_kl_samples)
             vi_expected_kl_divergence = vi_posterior_kl_divergence.mean().item()
             vi_std_kl_divergence = vi_posterior_kl_divergence.std().item()
-            vi_nll = -vi.distribution().log_prob(x.reshape(model_posterior.batch_shape
-                                                           + model_posterior.event_shape).to(device))
+            vi_nll = -vi.distribution().log_prob(model.sample_space_transform(x)
+                                                 .reshape(model_posterior.batch_shape
+                                                          + model_posterior.event_shape).to(device))
+            vi_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape).to(device)
+                                             ).reshape(*prior.batch_shape, 1, 1))
             vi_expected_nll = vi_nll.mean().item()
             vi_std_nll = vi_nll.std().item()
             vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
@@ -122,7 +137,7 @@ def test_conjugate_prior(model: DistributionTransformer,
             model_std_elbo = model_elbo.std().item()
 
         if "pfns" in competitor_kwargs:
-            assert torch.prod(torch.tensor(exact_prior.event_shape)).item() == 1, \
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
                 "pfns only supported for univariate output distributions"
             # PFN solution
             pfn_kwargs = copy(competitor_kwargs["pfns"])
@@ -164,7 +179,7 @@ def test_conjugate_prior(model: DistributionTransformer,
 
         # Exact solution
         phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
-        exact_prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
         phi_posterior_dict = conjugacy_update(phi_prior_dict, z, "cpu")
         exact_posterior = complete_distribution.meta_prior.prior(**phi_posterior_dict)
 
@@ -181,6 +196,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "model_std_prior_kl_divergence": model_std_prior_kl_divergence,
                 "model_expected_posterior_kl_divergence": model_expected_posterior_kl_divergence,
                 "model_std_posterior_kl_divergence": model_std_posterior_kl_divergence,
+                "model_posterior_expected_nll": model_posterior_expected_nll,
+                "model_posterior_std_nll": model_posterior_std_nll,
                 "inference_time": inference_time,
                 "single_inference_time": single_inference_time,
                 "model_size": model_size
@@ -214,7 +231,7 @@ def test_conjugate_prior(model: DistributionTransformer,
 
         # Plotting
         if plot:
-            assert torch.prod(torch.tensor(exact_prior.event_shape)).item() == 1, \
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
                 "plotting only supported for single output distributions"
 
             if bounds_func is None:
@@ -225,7 +242,7 @@ def test_conjugate_prior(model: DistributionTransformer,
                     return samples[499].item(), samples[9499].item()
 
 
-            prior_plot = plot_distributions(exact_prior, model_prior, None, model.sample_space_transform,
+            prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
                                             bounds_func(phi_prior_dict),
                                             n_kl_samples=n_kl_samples)
 
@@ -234,7 +251,7 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                 n_kl_samples=n_kl_samples)
 
             if "vi" in competitor_kwargs:
-                vi = GMMVI(model.n_components, model.state_size, exact_prior, complete_distribution.observation_model,
+                vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
                            inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
@@ -334,9 +351,12 @@ def test(model: DistributionTransformer,
         model_expected_prior_kl_divergence = prior_kl_divergence.mean().item()
         model_std_prior_kl_divergence = prior_kl_divergence.std().item()
 
-        model_posterior_nll = -model_posterior.log_prob(x.reshape(model_posterior.batch_shape
-                                                                  + model_posterior.event_shape).to(device)
-                                                        )
+        model_posterior_nll = -model_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(model_posterior.batch_shape
+                                                                 + model_posterior.event_shape).to(device))
+        model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape).to(device)
+                                             ).reshape(*prior.batch_shape, 1, 1))
         model_posterior_expected_nll = model_posterior_nll.mean().item()
         model_posterior_std_nll = model_posterior_nll.std().item()
 
@@ -353,8 +373,12 @@ def test(model: DistributionTransformer,
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)
             vi_time = time() - before_vi
-            vi_nll = -vi.distribution().log_prob(x.reshape(model_posterior.batch_shape
-                                                           + model_posterior.event_shape).to(device))
+            vi_nll = -vi.distribution().log_prob(model.sample_space_transform(x)
+                                                 .reshape(model_posterior.batch_shape
+                                                          + model_posterior.event_shape).to(device))
+            vi_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                   (x.reshape(model_posterior.batch_shape).to(device)
+                                    ).reshape(*prior.batch_shape, 1, 1))
             vi_expected_nll = vi_nll.mean().item()
             vi_std_nll = vi_nll.std().item()
             vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
@@ -381,9 +405,6 @@ def test(model: DistributionTransformer,
             pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
 
             pfn_nll = -pfn_posterior.log_prob(x.reshape(pfn_posterior.batch_shape).to(device))
-            pfn_nll += torch.logdet(vmap(jacrev(model.sample_space_transform))
-                                    (x.reshape(pfn_posterior.batch_shape).to(device)
-                                     ).reshape(*prior.batch_shape, 1, 1))
             pfn_expected_nll = pfn_nll.mean().item()
             pfn_std_nll = pfn_nll.std().item()
 
