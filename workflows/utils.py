@@ -27,6 +27,12 @@ def get_cosine_schedule_with_warmup(optimizer: Optimizer, num_warmup_steps: int,
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
-def get_openai_lr(transformer_model: Module):
-    num_params = sum(p.numel() for p in transformer_model.parameters())
+def get_openai_lr(model: Module):
+    num_params = sum(p.numel() for p in model.parameters())
     return 0.003239 - 0.0001395 * math.log(num_params)
+
+
+def get_model_size(model: Module):
+    param_size = sum(param.nelement() * param.element_size() for param in model.parameters())
+    buffer_size = sum(buffer.nelement() * buffer.element_size() for buffer in model.buffers())
+    return (param_size + buffer_size) / 1024 ** 2   # Return size in MB

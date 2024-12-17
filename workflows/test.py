@@ -17,6 +17,7 @@ from distributions.utils import decode_gmm_sample, kl_divergence, plot_distribut
 from competitor_methods.variational_inference import GMMVI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from workflows.train import train_pfn
+from workflows.utils import get_model_size
 
 
 def test_conjugate_prior(model: DistributionTransformer,
@@ -90,6 +91,8 @@ def test_conjugate_prior(model: DistributionTransformer,
         model_expected_posterior_kl_divergence = model_posterior_kl_divergence.mean().item()
         model_std_posterior_kl_divergence = model_posterior_kl_divergence.std().item()
 
+        model_size = get_model_size(model)
+
         print(f"GMM approximation prior mean KL divergence: {model_expected_prior_kl_divergence}\n"
               f"Posterior mean KL divergence: {model_expected_posterior_kl_divergence}\n")
 
@@ -143,6 +146,8 @@ def test_conjugate_prior(model: DistributionTransformer,
             pfn_expected_nll = pfn_nll.mean().item()
             pfn_std_nll = pfn_nll.std().item()
 
+            pfn_size = get_model_size(pfn)
+
             if "vi" in competitor_kwargs:
                 pfn_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=pfn_posterior,
                                               inverse_transform=Identity())
@@ -177,7 +182,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "model_expected_posterior_kl_divergence": model_expected_posterior_kl_divergence,
                 "model_std_posterior_kl_divergence": model_std_posterior_kl_divergence,
                 "inference_time": inference_time,
-                "single_inference_time": single_inference_time
+                "single_inference_time": single_inference_time,
+                "model_size": model_size
             })
         if "vi" in competitor_kwargs:
             _run.info.update({
@@ -197,7 +203,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "pfn_expected_kl_divergence": pfn_expected_kl_divergence,
                 "pfn_std_kl_divergence": pfn_std_kl_divergence,
                 "pfn_expected_nll": pfn_expected_nll,
-                "pfn_std_nll": pfn_std_nll
+                "pfn_std_nll": pfn_std_nll,
+                "pfn_size": pfn_size
             })
             if "vi" in competitor_kwargs:
                 _run.info.update({
@@ -333,6 +340,8 @@ def test(model: DistributionTransformer,
         model_posterior_expected_nll = model_posterior_nll.mean().item()
         model_posterior_std_nll = model_posterior_nll.std().item()
 
+        model_size = get_model_size(model)
+
         print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence.mean().item()}")
 
         if "vi" in competitor_kwargs:
@@ -378,6 +387,8 @@ def test(model: DistributionTransformer,
             pfn_expected_nll = pfn_nll.mean().item()
             pfn_std_nll = pfn_nll.std().item()
 
+            pfn_size = get_model_size(pfn)
+
             if "vi" in competitor_kwargs:
                 pfn_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=pfn_posterior,
                                               inverse_transform=Identity())
@@ -409,7 +420,8 @@ def test(model: DistributionTransformer,
                 "model_inference_time": inference_time,
                 "model_single_inference_time": single_inference_time,
                 "model_posterior_expected_nll": model_posterior_expected_nll,
-                "model_posterior_std_nll": model_posterior_std_nll
+                "model_posterior_std_nll": model_posterior_std_nll,
+                "model_size": model_size,
             })
             if "vi" in competitor_kwargs:
                 _run.info.update({
@@ -425,7 +437,8 @@ def test(model: DistributionTransformer,
                 _run.info.update({
                     "pfn_inference_time": pfn_inference_time,
                     "pfn_expected_nll": pfn_expected_nll,
-                    "pfn_std_nll": pfn_std_nll
+                    "pfn_std_nll": pfn_std_nll,
+                    "pfn_size": pfn_size
                 })
                 if "vi" in competitor_kwargs:
                     _run.info.update({
