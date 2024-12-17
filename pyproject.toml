@@ -14,7 +14,8 @@ dependencies = [
     "tqdm",
     "scikit-learn",
     "threadpoolctl>=3.0.0",
-    "matplotlib"
+    "matplotlib",
+    "gpytorch",
 ]
 requires-python = ">=3.12.0"
 

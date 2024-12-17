@@ -11,7 +11,7 @@ from typing import Union, Callable, Optional, TypedDict, NotRequired
 from model.embeddings import DistributionEmbedding, ComponentEmbedding, ObservationEmbedding
 
 
-class ConditionalTransformerKwargs(TypedDict):
+class TransformerKwargs(TypedDict):
     d_model: int
     n_head: int
     num_layers: NotRequired[int]
@@ -95,7 +95,7 @@ class ConditionalTransformer(nn.TransformerDecoder):
 class DistributionTransformer(nn.Module):
     def __init__(self,
                  component_embedding: ComponentEmbedding,
-                 transformer_kwargs: ConditionalTransformerKwargs,
+                 transformer_kwargs: TransformerKwargs,
                  n_components: Optional[int] = None,
                  prior_embedding: Optional[DistributionEmbedding] = None,
                  sample_space_transform: Optional[Callable[[Tensor], Tensor]] = None,

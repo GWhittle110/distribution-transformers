@@ -5,13 +5,13 @@ from torch.types import _size
 from typing import Optional
 import pytest
 
-from model.distribution_transformer import DistributionTransformer, ConditionalTransformerKwargs
+from model.distribution_transformer import DistributionTransformer, TransformerKwargs
 from model.embeddings import DistributionEmbedding, ComponentEmbedding, ObservationEmbedding, GammaEmbedding
 
 
 @pytest.fixture
 def conditional_transformer_kwargs():
-    return ConditionalTransformerKwargs(n_head=8)
+    return TransformerKwargs(n_head=8)
 
 
 class TestDistributionTransformer:
@@ -52,7 +52,7 @@ class TestDistributionTransformer:
     )
     def test_forward(self,
                      component_embedding: ComponentEmbedding,
-                     conditional_transformer_kwargs: ConditionalTransformerKwargs,
+                     conditional_transformer_kwargs: TransformerKwargs,
                      n_components: int,
                      prior_embedding: Optional[DistributionEmbedding],
                      observation_embeddings: dict[str, ObservationEmbedding],

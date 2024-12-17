@@ -4,10 +4,10 @@ module_path: "static.toy.inverse_gamma_variance_closed_form"
 n_components: 5
 
 meta_prior_kwargs:
-  concentration_concentration: 1
-  concentration_rate: 1
-  rate_concentration: 1
-  rate_rate: 1
+  concentration_concentration: 10000
+  concentration_rate: 10000
+  rate_concentration: 10000
+  rate_rate: 10000
 
 observation_loc:
   obs_1: [0]
@@ -40,17 +40,53 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 50
+  epochs: 20
   steps_per_epoch: 100
   batch_size: 2000
   lr: 0.001
   weight_decay: 0
   verbose: True
   progress_bar: True
-  save_interval: 5
-  save_loss_series: True
+  save_interval: -1
+  save_loss_series: False
 
 testing_kwargs:
   n_test_priors: 1000
   n_kl_samples: 10000
   plot: True,
+  competitor_kwargs:
+    vi:
+      lr: 0.01
+      lr_decay: 0.999
+      n_iters: 10000
+      n_samples: 10
+      ewma_gamma: 0.01
+      progress_bar: True
+      initial_logits_std: 1.
+      initial_loc_std: 0.1
+      initial_scale_tril_std: 0.1
+    pfns:
+      transformer_kwargs:
+        d_model: 64
+        n_head: 8
+        dim_feedforward: 2048
+        dropout: 0
+        num_layers: 6
+        activation: gelu
+      n_buckets: 10
+      infinite_support: [False, True]
+      leftmost_border: 0.
+      hidden_layer_sizes: [ 32 ]
+      activation: gelu
+      training_kwargs:
+        warmup_epochs: 5
+        epochs: 20
+        steps_per_epoch: 100
+        batch_size: 5000
+        lr: 0.001
+        weight_decay: 0
+        max_grad: 10.
+        verbose: True
+        progress_bar: True
+        save_interval: -1
+        save_loss_series: False

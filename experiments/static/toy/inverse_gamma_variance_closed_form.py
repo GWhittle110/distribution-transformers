@@ -80,4 +80,4 @@ def run(n_components: int,
         return 1e-6, 4 * rate / concentration + 1 / rate
 
     test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
-                         _run=_run, **testing_kwargs)
+                         inverse_transform=torch.exp, _run=_run, **testing_kwargs)

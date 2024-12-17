@@ -95,12 +95,13 @@ class GMMVI(nn.Module):
                                                                 ).reshape(n_samples, *self.prior.batch_shape,
                                                                           self.state_size, self.state_size))
         prob = self.distribution().log_prob(x)
-        kl *= torch.exp(prob - prob.clone().detach())  # Importance sampling trick
+        kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return kl.mean(dim=0)
 
     def posterior_loss(self, z: dict[str, Tensor],
                        n_samples: int = 1,
-                       distribution: Optional[Distribution] = None) -> Tensor:
+                       distribution: Optional[Distribution] = None,
+                       inverse_transform: Optional[Callable[[Tensor], Tensor]] = None) -> Tensor:
         """
         Negative ELBO for p(x|z).
 
@@ -110,24 +111,28 @@ class GMMVI(nn.Module):
                 Defaults to 1.
             distribution: External distribution to compute ELBO for. Set to None to use internal distribution.
                 Defaults to None.
+            inverse_transform: Inverse transform corresponding to provided external distribution.
+                Defaults to None.
 
         Returns:
             Negative ELBO loss.
 
         """
-        x = self.distribution().sample((n_samples,)) if distribution is None else distribution.sample((n_samples,))
+        distribution = self.distribution() if distribution is None else distribution
+        inverse_transform = self.inverse_transform if inverse_transform is None else inverse_transform
+        x = distribution.sample((n_samples,))
         elbo = self.prior.log_prob(self.inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
                                                                      *self.prior.event_shape))
         for key, likelihood in self.likelihood.items():
             likelihood.condition_(self.inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
                                                                     *self.prior.event_shape))
             elbo += likelihood.log_prob(z[key]).reshape(elbo.shape)
-        elbo -= self.distribution().log_prob(x)
-        elbo += torch.logdet(vmap(jacrev(self.inverse_transform))(x.reshape(-1, self.state_size)
-                                                                  ).reshape(n_samples, *self.prior.batch_shape,
-                                                                            self.state_size, self.state_size))
-        prob = self.distribution().log_prob(x)
-        elbo *= torch.exp(prob - prob.clone().detach())  # Importance sampling trick
+        elbo -= distribution.log_prob(x)
+        elbo += torch.logdet(vmap(jacrev(inverse_transform))(x.reshape(-1, self.state_size)
+                                                             ).reshape(n_samples, *self.prior.batch_shape,
+                                                                       self.state_size, self.state_size))
+        prob = distribution.log_prob(x)
+        elbo *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return -elbo.mean(dim=0)
 
     def fit(self, z: Optional[dict[str, Tensor]] = None,
