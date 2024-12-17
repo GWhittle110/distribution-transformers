@@ -5,6 +5,7 @@ Testing workflow
 import torch
 from torch import Tensor
 from torch.nn import Identity
+from torch.func import vmap, jacrev
 
 from time import time
 from typing import Callable, Optional
@@ -81,11 +82,11 @@ def test_conjugate_prior(model: DistributionTransformer,
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
 
         model_prior_kl_divergence = kl_divergence(exact_prior, model_prior, model.sample_space_transform,
-                                            n_kl_samples)
+                                                  n_kl_samples)
         model_expected_prior_kl_divergence = model_prior_kl_divergence.mean().item()
         model_std_prior_kl_divergence = model_prior_kl_divergence.std().item()
         model_posterior_kl_divergence = kl_divergence(exact_posterior, model_posterior, model.sample_space_transform,
-                                                n_kl_samples)
+                                                      n_kl_samples)
         model_expected_posterior_kl_divergence = model_posterior_kl_divergence.mean().item()
         model_std_posterior_kl_divergence = model_posterior_kl_divergence.std().item()
 
@@ -371,6 +372,9 @@ def test(model: DistributionTransformer,
             pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
 
             pfn_nll = -pfn_posterior.log_prob(x.reshape(pfn_posterior.batch_shape).to(device))
+            pfn_nll += torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                    (x.reshape(pfn_posterior.batch_shape).to(device)
+                                     ).reshape(*prior.batch_shape, 1, 1))
             pfn_expected_nll = pfn_nll.mean().item()
             pfn_std_nll = pfn_nll.std().item()
 
