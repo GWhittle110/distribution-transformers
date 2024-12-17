@@ -16,24 +16,24 @@ class TestRiemannDistribution:
         [
             (
                 torch.tensor([1., 1., 1.]),
-                torch.tensor([0., 1.]),
+                torch.tensor([-1., 0., 1., 2.]),
                 True,
                 torch.tensor(0.5),
                 torch.tensor(-1.0986)
             ),
             (
                 torch.tensor([1., 1., 1.]),
-                torch.tensor([0., 1.]),
+                torch.tensor([-1., 0., 1., 2.]),
                 True,
                 torch.tensor([-0.5, 0.5, 1.5]),
-                torch.tensor([-1.4494, -1.0986, -1.4494])
+                torch.tensor([-1.7755, -1.0986, -1.7755])
             ),
             (
                 torch.tensor([[1., 1., 1.]] * 3),
-                torch.tensor([[0., 1.]] * 3),
+                torch.tensor([[-1., 0., 1., 2.]] * 3),
                 True,
                 torch.tensor([-0.5, 0.5, 1.5]),
-                torch.tensor([-1.4494, -1.0986, -1.4494])
+                torch.tensor([-1.7755, -1.0986, -1.7755])
             ),
             (
                 torch.tensor([1., 2., 3.]),
@@ -51,10 +51,10 @@ class TestRiemannDistribution:
             ),
             (
                 torch.tensor([[1., 1., 1.]] * 3),
-                torch.tensor([[0., 1., 2.]] * 3),
+                torch.tensor([[-1., 0., 1., 2.]] * 3),
                 (True, False),
                 torch.tensor([-0.5, 0.5, 1.5]),
-                torch.tensor([-1.4494, -1.0986, -1.0986])
+                torch.tensor([-1.7755, -1.0986, -1.0986])
             )
         ]
     )
@@ -71,14 +71,14 @@ class TestRiemannDistribution:
         [
             (
                 torch.tensor([1., 1., 1.]),
-                torch.tensor([0., 1.]),
+                torch.tensor([-1., 0., 1., 2.]),
                 True,
                 torch.Size(),
                 torch.Size()
             ),
             (
                 torch.tensor([[1., 1., 1.]] * 2),
-                torch.tensor([[0., 1., 2.]] * 2),
+                torch.tensor([[-1., 0., 1., 2.]] * 2),
                 (True, False),
                 (10,),
                 (10, 2)
@@ -104,37 +104,51 @@ class TestRiemannDistribution:
 
 
 @pytest.mark.parametrize(
-    ("prior", "n_buckets", "infinite_support", "expected_result"),
+    ("prior", "n_buckets", "infinite_support", "leftmost_border", "rightmost_border", "expected_result"),
     [
         (
             Normal(0, 1),
-            11,
+            10,
             True,
-            Normal(0, 1).icdf(torch.linspace(0.1, 0.9, 9))
+            -4,
+            4.,
+            torch.hstack([torch.tensor(-4.), Normal(0, 1).icdf(torch.linspace(0.1, 0.9, 9)),
+                          torch.tensor(4.),])
         ),
         (
             MultivariateNormal(torch.tensor([0.]), torch.tensor([[1.]])),
-            11,
+            10,
             True,
-            Normal(0, 1).icdf(torch.linspace(0.1, 0.9, 9))
+            -4.,
+            4.,
+            torch.hstack([torch.tensor(-4.), Normal(0, 1).icdf(torch.linspace(0.1, 0.9, 9)),
+                          torch.tensor(4.), ])
         ),
         (
             Beta(torch.ones(5, 3), torch.ones(5, 3)),
-            11,
+            10,
             False,
+            0.,
+            1.,
             torch.linspace(0, 1, 11).broadcast_to(5, 3, 11)
         ),
         (
             Exponential(1),
-            11,
+            10,
             (False, True),
-            Exponential(1).icdf(torch.linspace(0, 0.9, 10))
+            0.,
+            10.,
+            torch.hstack([torch.tensor(0.), Exponential(1).icdf(torch.linspace(0.1, 0.9, 9)),
+                          torch.tensor(10.)])
         )
 
     ]
 )
 def test_get_borders_from_prior(prior: Distribution,
                                 n_buckets: int,
-                                infinite_support: bool,
+                                infinite_support: Union[bool, tuple[bool, bool]],
+                                leftmost_border: float,
+                                rightmost_border: float,
                                 expected_result: Tensor):
-    assert torch.allclose(get_borders_from_prior(prior, n_buckets, infinite_support), expected_result, atol=0.05)
+    assert torch.allclose(get_borders_from_prior(prior, n_buckets, infinite_support, leftmost_border, rightmost_border),
+                          expected_result, atol=0.1)

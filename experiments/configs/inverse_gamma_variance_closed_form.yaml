@@ -73,7 +73,7 @@ testing_kwargs:
         dropout: 0
         num_layers: 6
         activation: gelu
-      n_buckets: 10
+      n_buckets: 15
       infinite_support: [False, True]
       leftmost_border: 0.
       hidden_layer_sizes: [ 32 ]

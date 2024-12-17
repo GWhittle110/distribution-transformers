@@ -42,8 +42,9 @@ class RiemannDistribution(Distribution):
 
         """
         super().__init__(event_shape=torch.Size(), batch_shape=probs.shape[:-1])
+
+        assert borders.shape[-1] == probs.shape[-1] + 1, "number of bucket probs must equal to number of borders + 1"
         self.probs = probs / probs.sum(dim=-1, keepdim=True)
-        self.borders = borders.broadcast_to(*self.probs.shape[:-1], borders.shape[-1])
 
         if isinstance(infinite_support, bool):
             self.left_infinite_support = self.right_infinite_support = infinite_support
@@ -51,15 +52,13 @@ class RiemannDistribution(Distribution):
             self.left_infinite_support = infinite_support[0]
             self.right_infinite_support = infinite_support[1]
 
-        self.left_variance = torch.ones(self.batch_shape, device=self.borders.device) \
-            if self.left_infinite_support or self.borders.shape[-1] == 1 \
-            else 2.2 * self.borders.diff()[..., 0] ** 2
-        self.right_variance = torch.ones(self.batch_shape, device=self.borders.device) \
-            if self.right_infinite_support or self.borders.shape[-1] == 1 \
-            else 2.2 * self.borders.diff()[..., -1] ** 2
+        borders = borders.broadcast_to(*self.probs.shape[:-1], borders.shape[-1])
+        self.left_variance = 2.2 * borders.diff()[..., 0] ** 2 \
+            if self.left_infinite_support else torch.ones(self.batch_shape, device=borders.device)
+        self.right_variance = 2.2 * borders.diff()[..., -1] ** 2 \
+            if self.right_infinite_support else torch.ones(self.batch_shape, device=borders.device)
+        self.borders = borders[..., self.left_infinite_support:-1 if self.right_infinite_support else None]
 
-        assert probs.shape[-1] == borders.shape[-1] - 1 + self.left_infinite_support + self.right_infinite_support, \
-            "number of bucket weights must correspond to number of buckets"
         self.bucket_log_probs = self.probs[..., self.left_infinite_support:-1
                                            if self.right_infinite_support else None].log() - self.borders.diff().log()
 
@@ -91,10 +90,10 @@ class RiemannDistribution(Distribution):
         bucket_dist = Categorical(probs=self.probs)
         max_bucket = self.probs.shape[-1] - 1
         buckets = bucket_dist.sample(sample_shape).to(device)
-        borders = torch.hstack([self.borders[..., 0:1] * (1 - self.borders[..., 0:1].sign() * 1e-3)]
+        borders = torch.hstack([(self.borders[..., 0:1] - 1e-6) * (1 - self.borders[..., 0:1].sign() * 1e-3)]
                                * self.left_infinite_support +
                                [self.borders] +
-                               [self.borders[..., -1:] * (1 + self.borders[..., -1:].sign() * 1e-4)]
+                               [(self.borders[..., -1:] + 1e-6) * (1 + self.borders[..., -1:].sign() * 1e-4)]
                                * self.right_infinite_support)
         uniform_sample = Uniform(borders.gather(-1, buckets.swapdims(0, -1)).swapdims(0, -1),
                                  borders.gather(-1, buckets.swapdims(0, -1) + 1).swapdims(0, -1)).sample()
@@ -121,7 +120,7 @@ class RiemannDistribution(Distribution):
 
 def get_borders_from_prior(prior: Distribution,
                            n_buckets: int,
-                           infinite_support: Union[bool, tuple[bool, bool]] = True,
+                           infinite_support: Union[bool, tuple[bool, bool]],
                            leftmost_border: Optional[float] = None,
                            rightmost_border: Optional[float] = None,
                            n_samples: int = 10000
@@ -132,8 +131,9 @@ def get_borders_from_prior(prior: Distribution,
     Args:
         prior: Prior distribution to match.
         n_buckets: Number of buckets.
-        infinite_support: Whether the distribution has finite or infinite support.
-            Defaults to True.
+        infinite_support: Whether the distribution has finite (False), left or right half-infinite ((True, False)
+                etc) or infinite (True) support.
+                Defaults to True (infinite support).
         leftmost_border: Hard leftmost border to assign if specified.
             Defaults to None.
         rightmost_border: Hard rightmost border to assign if specified.
@@ -148,7 +148,6 @@ def get_borders_from_prior(prior: Distribution,
     assert torch.prod(torch.tensor(prior.event_shape)) == 1, "only defined for univariate distributions"
 
     samples = prior.sample((n_samples,)).reshape(*prior.batch_shape, n_samples)
-    quantiles = torch.linspace(0., 1., n_buckets+1).broadcast_to(*prior.batch_shape, n_buckets+1)
 
     if isinstance(infinite_support, bool):
         left_infinite_support = right_infinite_support = infinite_support
@@ -156,17 +155,23 @@ def get_borders_from_prior(prior: Distribution,
         left_infinite_support = infinite_support[0]
         right_infinite_support = infinite_support[1]
 
-    quantiles = quantiles[..., left_infinite_support:-1 if right_infinite_support else None]
+    quantiles = torch.linspace(0., 1., n_buckets+1).broadcast_to(*prior.batch_shape, n_buckets+1)
+    # Account for 50% probability mass of infinite tails
+    if left_infinite_support:
+        quantiles[..., 0] = 0.5 * (quantiles[..., 0] + quantiles[..., 1])
+    if right_infinite_support:
+        quantiles[..., -1] = 0.5 * (quantiles[..., -1] + quantiles[..., -2])
 
     quantile_func = torch.quantile
     for i in range(len(prior.batch_shape)):
         quantile_func = vmap(quantile_func)
-
     borders = quantile_func(samples, quantiles, dim=-1)
+
     if leftmost_border is not None:
         borders[..., 0] = leftmost_border
     if rightmost_border is not None:
         borders[..., -1] = rightmost_border
+
     return borders
 
 
