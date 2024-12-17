@@ -121,18 +121,19 @@ class GMMVI(nn.Module):
         distribution = self.distribution() if distribution is None else distribution
         inverse_transform = self.inverse_transform if inverse_transform is None else inverse_transform
         x = distribution.sample((n_samples,))
-        elbo = self.prior.log_prob(self.inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
-                                                                     *self.prior.event_shape))
+        elbo = self.prior.log_prob(inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
+                                                                *self.prior.event_shape))
         for key, likelihood in self.likelihood.items():
-            likelihood.condition_(self.inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
-                                                                    *self.prior.event_shape))
+            likelihood.condition_(inverse_transform(x).reshape(n_samples, *self.prior.batch_shape,
+                                                               *self.prior.event_shape))
             elbo += likelihood.log_prob(z[key]).reshape(elbo.shape)
         elbo -= distribution.log_prob(x)
         elbo += torch.logdet(vmap(jacrev(inverse_transform))(x.reshape(-1, self.state_size)
                                                              ).reshape(n_samples, *self.prior.batch_shape,
                                                                        self.state_size, self.state_size))
-        prob = distribution.log_prob(x)
-        elbo *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
+        if torch.is_grad_enabled():
+            prob = distribution.log_prob(x)
+            elbo *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return -elbo.mean(dim=0)
 
     def fit(self, z: Optional[dict[str, Tensor]] = None,

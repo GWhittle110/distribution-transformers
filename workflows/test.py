@@ -138,7 +138,7 @@ def test_conjugate_prior(model: DistributionTransformer,
             pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
 
             pfn_posterior_kl_divergence = kl_divergence(exact_posterior, pfn_posterior,
-                                                        model.sample_space_transform,
+                                                        None,
                                                         n_kl_samples)
             pfn_expected_kl_divergence = pfn_posterior_kl_divergence.mean().item()
             pfn_std_kl_divergence = pfn_posterior_kl_divergence.std().item()
