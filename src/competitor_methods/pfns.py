@@ -155,7 +155,7 @@ def get_borders_from_prior(prior: Distribution,
         left_infinite_support = infinite_support[0]
         right_infinite_support = infinite_support[1]
 
-    quantiles = torch.linspace(0., 1., n_buckets+1).broadcast_to(*prior.batch_shape, n_buckets+1)
+    quantiles = torch.linspace(0., 1., n_buckets+1)
     # Account for 50% probability mass of infinite tails
     if left_infinite_support:
         quantiles[..., 0] = 0.5 * (quantiles[..., 0] + quantiles[..., 1])
@@ -165,7 +165,7 @@ def get_borders_from_prior(prior: Distribution,
     quantile_func = torch.quantile
     for i in range(len(prior.batch_shape)):
         quantile_func = vmap(quantile_func)
-    borders = quantile_func(samples, quantiles, dim=-1)
+    borders = quantile_func(samples, quantiles.broadcast_to(*prior.batch_shape, n_buckets+1), dim=-1)
 
     if leftmost_border is not None:
         borders[..., 0] = leftmost_border
