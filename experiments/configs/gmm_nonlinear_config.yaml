@@ -1,5 +1,5 @@
 name: gmm_closed_form
-module_path: "static.toy.gmm_nonlinear"
+module_path: "static.gmm_nonlinear"
 
 n_components: 8
 state_size: 1

@@ -1,5 +1,5 @@
 name: gmm_closed_form
-module_path: "static.toy.inverse_gamma_variance_closed_form"
+module_path: "static.inverse_gamma_variance_closed_form"
 
 n_components: 5
 

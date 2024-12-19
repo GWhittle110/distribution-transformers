@@ -20,6 +20,6 @@ def main(_config=None, _run=None):
         _run: Sacred run object.
 
     """
-    experiment = import_module("experiments." + _config["module_path"])
+    experiment = import_module("experiments.sources." + _config["module_path"])
     experiment.run(**_config, _run=_run)
 

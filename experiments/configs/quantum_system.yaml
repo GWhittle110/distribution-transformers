@@ -1,5 +1,5 @@
 name: gmm_closed_form
-module_path: "static.toy.quantum_system"
+module_path: "static.quantum_system"
 
 n_components: 5
 
