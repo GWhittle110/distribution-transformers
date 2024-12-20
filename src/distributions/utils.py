@@ -165,7 +165,7 @@ def gmm_bounds_func(phi: dict[str, Tensor], scale_parametrisation: str = "covari
         max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()
     else:
         index = (phi[scale_parametrisation].flatten() * phi["weights"].flatten()).argmax()
-        max_std = phi[scale_parametrisation][index].flatten().sqrt().item()
+        max_std = phi[scale_parametrisation].flatten()[index].sqrt().item()
     max_loc = phi["loc"].max().item()
     min_loc = phi["loc"].min().item()
     return min_loc - 4 * max_std, max_loc + 4 * max_std

@@ -248,7 +248,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             self.loc_precision_matrix = loc_precision_matrix
             self.loc_scale_tril = loc_scale_tril
         self.scale_parametrisation = "covariance_matrix" if scale_parametrisation is None else scale_parametrisation
-        self.scale_df = (self.state_size + 1) // default_scale_multiple if scale_df is None else scale_df
+        self.scale_df = (self.state_size + 1) // min(default_scale_multiple, 1) if scale_df is None else scale_df
         if scale_covariance_matrix is None and scale_precision_matrix is None and scale_scale_tril is None:
             self.scale_covariance_matrix = (torch.eye(self.state_size, dtype=torch.float32
                                                       ).broadcast_to(self.n_components, self.state_size,

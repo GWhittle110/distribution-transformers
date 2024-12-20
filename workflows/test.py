@@ -8,16 +8,19 @@ from torch.nn import Identity
 from torch.func import vmap, jacrev
 
 from time import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 from copy import copy
 
 from model.distribution_transformer import DistributionTransformer
-from distributions.distributions import CompleteDistribution, GaussianMixtureModel
-from distributions.utils import decode_gmm_sample, kl_divergence, plot_distributions
+from distributions.distributions import CompleteDistribution, GaussianMixtureModel, ObservationModel
+from distributions.utils import decode_gmm_sample, encode_gmm_sample, kl_divergence, plot_distributions, gmm_bounds_func
 from competitor_methods.variational_inference import GMMVI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from workflows.train import train_pfn
 from workflows.utils import get_model_size
+from dynamic.motion_models import LTIMotionModel
+from dynamic.filters import LTIFilter
+from dynamic.utils import plot_filtered_series
 
 
 def test_conjugate_prior(model: DistributionTransformer,
@@ -60,6 +63,7 @@ def test_conjugate_prior(model: DistributionTransformer,
 
     with torch.no_grad():
         device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+        scale_parametrisation = model.component_embedding.scale_parametrisation
 
         # Test inputs
         phi, x, z = complete_distribution.sample((n_test_priors,))
@@ -79,8 +83,8 @@ def test_conjugate_prior(model: DistributionTransformer,
         start_time = time()
         phi_in, phi_out = model(phi.to(device), **z)
         model_inference_time = time() - start_time
-        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
-        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
         model_prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
                                                   n_kl_samples)
@@ -187,8 +191,8 @@ def test_conjugate_prior(model: DistributionTransformer,
         start_time = time()
         phi_in, phi_out = model(phi, **z)
         model_single_inference_time = time() - start_time
-        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
-        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
         if _run is not None:
             _run.info.update({
@@ -327,6 +331,8 @@ def test(model: DistributionTransformer,
 
         device = gpu_device if torch.cuda.is_available() else 'cpu:0'
 
+        scale_parametrisation = model.component_embedding.scale_parametrisation
+
         # Test inputs
         phi, x, z = complete_distribution.sample((n_test_priors,))
 
@@ -342,9 +348,9 @@ def test(model: DistributionTransformer,
         # Model solution
         start_time = time()
         phi_in, phi_out = model(phi.to(device), **z)
-        inference_time = time() - start_time
-        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
-        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
+        model_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
         prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
                                             n_kl_samples)
@@ -430,16 +436,16 @@ def test(model: DistributionTransformer,
         # Model solution
         start_time = time()
         phi_in, phi_out = model(phi, **z)
-        single_inference_time = time() - start_time
-        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in))
-        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out))
+        model_single_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
         if _run is not None:
             _run.info.update({
                 "model_expected_prior_kl_divergence": model_expected_prior_kl_divergence,
                 "model_std_prior_kl_divergence": model_std_prior_kl_divergence,
-                "model_inference_time": inference_time,
-                "model_single_inference_time": single_inference_time,
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
                 "model_posterior_expected_nll": model_posterior_expected_nll,
                 "model_posterior_std_nll": model_posterior_std_nll,
                 "model_size": model_size,
@@ -525,3 +531,113 @@ def test(model: DistributionTransformer,
                         "pfn_single_inference_time": pfn_single_inference_time
                     })
 
+
+def test_lti_filter(model: DistributionTransformer,
+                    motion_model: LTIMotionModel,
+                    observation_model: dict[str, ObservationModel],
+                    competitor_kwargs: Optional[dict[str, dict]] = None,
+                    series_length: int = 1000,
+                    n_test_series: int = 1000,
+                    plotting_kwargs: Optional[dict] = None,
+                    gpu_device: str = "cuda:0",
+                    _run=None
+                    ) -> None:
+    """
+    Test model on Bayesian filtering task. Currently restricted to GMM initial priors.
+
+    Args:
+        model: Model to test.
+        motion_model: Motion model for dynamical system.
+        observation_model: Observation model for dynamical system.
+        competitor_kwargs: Kwargs for competitor methods.
+            Defaults to None.
+        series_length: Length of series to test on.
+            Defaults to 1000.
+        n_test_series: Number of series to test on.
+            Defaults to 1000.
+        plotting_kwargs: Plotting kwargs. Set to None to disable plotting.
+            Defaults to NOne.
+        gpu_device: GPU device to test on.
+            Defaults to cuda:0.
+        _run: Sacred run object.
+
+    Returns:
+
+    """
+    with torch.no_grad():
+        device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+        model.to(device)
+        scale_parametrisation = model.component_embedding.scale_parametrisation
+
+        model_size = get_model_size(model)
+
+        series = motion_model.sample((series_length, n_test_series))
+
+        for obs_model in observation_model.values():
+            obs_model.condition_(series)
+
+        observation_series = {key: obs_model.sample().to(device) for key, obs_model in observation_model.items()}
+
+        # Model solution
+        filter = LTIFilter(model, motion_model)
+
+        start_time = time()
+        filtered_series = filter.filter(observation_series, motion_model.x0_distribution)
+        model_inference_time = time() - start_time
+
+        filtered_series_dict = decode_gmm_sample(filtered_series, scale_parametrisation)
+        model_nll = -GaussianMixtureModel(**filtered_series_dict).log_prob(series)
+        model_expected_nll = model_nll.mean().item()
+        model_std_nll = model_nll.std().item()
+
+        # Single problem run
+
+        # Device
+        model.cpu()
+
+        series = motion_model.sample((series_length,))
+
+        for obs_model in observation_model.values():
+            obs_model.condition_(series)
+
+        observation_series = {key: obs_model.sample().cpu() for key, obs_model in observation_model.items()}
+
+        # Model solution
+        filter = LTIFilter(model, motion_model)
+
+        start_time = time()
+        filtered_series = filter.filter(observation_series, motion_model.x0_distribution)
+        model_single_inference_time = time() - start_time
+
+        if _run is not None:
+            _run.info.update({
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
+                "model_expected_nll": model_expected_nll,
+                "model_std_nll": model_std_nll,
+                "model_size": model_size
+            })
+
+        # Plotting first dimension of state space
+        if plotting_kwargs is not None:
+            # Select dimension
+            dim = plotting_kwargs["dim"]
+
+            filtered_series_dict = decode_gmm_sample(filtered_series, scale_parametrisation)
+            filtered_series_dict["loc"] = filtered_series_dict["loc"][..., dim].unsqueeze(-1)
+            filtered_series_dict[scale_parametrisation] = \
+                filtered_series_dict[scale_parametrisation].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
+                    -1).unsqueeze(-1)
+            filtered_series = encode_gmm_sample(filtered_series_dict, scale_parametrisation)
+
+            bounds = list(zip(*[gmm_bounds_func(decode_gmm_sample(dist, scale_parametrisation))
+                                for dist in filtered_series]))
+            bounds = (max(bounds[0]), min(bounds[1]))
+            bounds = (max(bounds[0], series.max().item() + 1), min(bounds[1], series.min().item() - 1))
+
+            filter_distribution = GaussianMixtureModel(**filtered_series_dict)
+
+            model_series_plot = plot_filtered_series(filter_distribution, series, bounds, **plotting_kwargs)
+
+            if _run is not None:
+                model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.png")
