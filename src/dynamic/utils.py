@@ -11,7 +11,6 @@ def plot_filtered_series(filter_distribution: Distribution,
                          series: Optional[Tensor] = None,
                          bounds: Optional[tuple[float, float]] = None,
                          n_vertical: int = 1000,
-                         n_levels: int = 5,
                          *args,
                          **kwargs) -> plt.Figure:
     if bounds is None:

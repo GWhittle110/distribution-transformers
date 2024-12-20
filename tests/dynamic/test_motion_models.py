@@ -12,20 +12,18 @@ from dynamic.motion_models import MotionModel, LTIMotionModel
 class TestMotionModel:
 
     @pytest.mark.parametrize(
-        ("state_size", "mu", "sigma", "x0_distribution", "noise_distribution", "sample_shape"),
+        ("state_size", "f", "x0_distribution", "noise_distribution", "sample_shape"),
         [
             (
                 1,
-                lambda x, k: x,
-                lambda x, k: torch.ones(1, 1),
+                lambda x, n, k: x + torch.einsum("ij, ...j -> ...i", torch.ones(1, 1), n),
                 MultivariateNormal(torch.zeros(1), torch.eye(1)),
                 MultivariateNormal(torch.zeros(1), torch.eye(1)),
                 (10,)
             ),
             (
                 2,
-                lambda x, k: x,
-                lambda x, k: torch.ones(2, 3),
+                lambda x, n, k: x + torch.einsum("ij, ...j -> ...i", torch.ones(2, 3), n),
                 MultivariateNormal(torch.zeros(2), torch.eye(2)),
                 MultivariateNormal(torch.zeros(3), torch.eye(3)),
                 (10, 5,)
@@ -33,12 +31,11 @@ class TestMotionModel:
         ]
     )
     def test_sample(self, state_size: int,
-                    mu: Callable[[Tensor, int], Tensor],
-                    sigma: Callable[[Tensor, int], Tensor],
+                    f: Callable[[Tensor, Tensor, int], Tensor],
                     x0_distribution: Distribution,
                     noise_distribution: Distribution,
                     sample_shape: _size):
-        motion_model = MotionModel(state_size, mu, sigma, x0_distribution, noise_distribution)
+        motion_model = MotionModel(state_size, f, x0_distribution, noise_distribution)
         sample = motion_model.sample(sample_shape)
         assert sample.shape == sample_shape + (state_size,)
 

@@ -55,7 +55,7 @@ class LTIFilter(Filter):
 
     def filter(self, observation_series: dict[str, Tensor],
                x0_distribution: MultivariateNormal
-               ) -> Tensor:
+               ) -> dict[str, Tensor]:
         """
         Filter the provided series (assuming sequence in first dimension) assuming initial uncertainty
         x0_distribution.
@@ -102,4 +102,4 @@ class LTIFilter(Filter):
                                                       + process_noise_covariance_matrix)
             prior_params = encode_gmm_sample(prior_params_dict)
 
-        return filtered_params
+        return decode_gmm_sample(filtered_params)

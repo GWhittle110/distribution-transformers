@@ -1,0 +1,153 @@
+"""
+Extended Kalman filter competitor for filtering tasks
+"""
+
+import torch
+from torch import Tensor
+from torch.distributions import Distribution
+from torch.func import vmap, jacrev
+
+from functools import partial
+
+from distributions.distributions import (ObservationModel, DirectGaussianObservationModel,
+                                         MappedGaussianObservationModel, LinearGaussianObservationModel)
+from distributions.utils import batch_diag
+from dynamic.motion_models import MotionModel, LTIMotionModel
+from dynamic.filters import Filter
+
+
+class EKF(Filter):
+
+    def __init__(self, state_size: int,
+                 motion_model: MotionModel,
+                 **observation_model: ObservationModel):
+        """
+        Extended Kalman Filter (EKF). Assumes Gaussianity and linearises dynamics and observations.
+
+        Args:
+            state_size: Size of state.
+            motion_model: Motion model. Linearises mapping from state to mean of next state distribution.
+            observation_model: Observation model. Linearises mapping from state to mean of observation distribution.
+        """
+        self.state_size = state_size
+        self.motion_model = motion_model
+        self.observation_model = observation_model
+
+    def filter(self, observation_series: dict[str, Tensor],
+               x0_distribution: Distribution
+               ) -> dict[str, Tensor]:
+        """
+        Filter the provided series (assuming sequence in first dimension) assuming initial uncertainty
+        x0_distribution.
+
+        Args:
+            observation_series: Dictionary of tensors containing observations of series to filter.
+            x0_distribution: Initial state distribution.
+
+        Returns:
+            Tensor of multivariate Gaussian parameters of shape (series_length | batch_shape | mu sigma).
+
+        """
+        device = list(observation_series.values())[0].device
+
+        batched_series_shape = list(observation_series.values())[0].shape[:-1]
+        batch_shape = batched_series_shape[1:]
+        if batch_shape == torch.Size():
+            batch_shape = (1,)
+
+        init_loc = x0_distribution.mean.broadcast_to(*batch_shape, self.state_size).to(device)
+        init_covariance_matrix = getattr(x0_distribution, "covariance_matrix", batch_diag(x0_distribution.variance)
+                                         ).to(device)
+        prior_params = {"loc": init_loc, "covariance_matrix": init_covariance_matrix}
+
+        filtered_loc = torch.empty(*batched_series_shape, self.state_size)
+        filtered_covariance_matrix = torch.empty(*batched_series_shape, self.state_size, self.state_size)
+
+        for i, observations in enumerate(zip(*observation_series.values())):
+            posterior_params = self._update(prior_params, **dict(zip(observation_series, observations)))
+            filtered_loc[i] = posterior_params["loc"]
+            filtered_covariance_matrix[i] = posterior_params["covariance_matrix"]
+            prior_params = self._predict(posterior_params, i)
+
+        return {"loc": filtered_loc, "covariance_matrix": filtered_covariance_matrix}
+
+    def _predict(self, prev_posterior_params: dict[str, Tensor],
+                 k: int,
+                 ) -> dict[str, Tensor]:
+        """
+        Prediction step of EKF.
+
+        Args:
+            prev_posterior_params: Parameters of posterior distribution for previous step.
+            k: Timestep index.
+
+        Returns:
+            Parameters of prior distribution for current step.
+
+        """
+        x = prev_posterior_params["loc"]
+        P = prev_posterior_params["covariance_matrix"]
+
+        device = x.device
+
+        posterior_loc = self.motion_model.f(x.cpu(), self.motion_model.noise_distribution.mean, k).to(device)
+
+        if isinstance(self.motion_model, LTIMotionModel):
+            F = self.motion_model.state_transition_matrix.to(device)
+            L = self.motion_model.process_noise_covariance_matrix.to(device)
+            Q = torch.eye(self.state_size, device=device)
+        else:
+            F = vmap(jacrev(partial(self.motion_model.f, n=self.motion_model.noise_distribution.mean, k=k))
+                     )(x.cpu()).to(device)
+            L = jacrev(lambda n: self.motion_model.f(x.cpu(), n, k)
+                       )(self.motion_model.noise_distribution.mean).to(device)
+            Q = getattr(self.motion_model.noise_distribution, "covariance_matrix",
+                        batch_diag(self.motion_model.noise_distribution.variance)).to(device)
+
+        posterior_covariance_matrix = (F @ P @ F.mT + L @ Q @ L.mT)
+
+        return {"loc": posterior_loc, "covariance_matrix": posterior_covariance_matrix}
+
+    def _update(self, prior_params: dict[str, Tensor],
+                **observations: Tensor
+                ) -> dict[str, Tensor]:
+        """
+        Update step of EKF.
+
+        Args:
+            prior_params: Parameters of prior distribution for current step.
+
+        Returns:
+            Parameters of posterior distribution for current step.
+
+        """
+        x = prior_params["loc"]
+        P = prior_params["covariance_matrix"]
+
+        device = x.device
+
+        for key, observation in observations.items():
+            observation_model = self.observation_model[key]
+
+            y = observation - observation_model.conditional_mean(x).to(device)
+
+            if isinstance(observation_model, LinearGaussianObservationModel):
+                H = observation_model.observation_matrix.to(device)
+                R = observation_model.covariance_matrix.to(device)
+            elif isinstance(observation_model, MappedGaussianObservationModel):
+                H = vmap(jacrev(observation_model.mapping))(x)
+                R = observation_model.covariance_matrix.to(device)
+            elif isinstance(observation_model, DirectGaussianObservationModel):
+                H = torch.eye(self.state_size, device=device)
+                R = observation_model.covariance_matrix.to(device)
+            else:
+                H = torch.stack([jacrev(observation_model.conditional_mean)(x_batch) for x_batch in x])
+                R = getattr(observation_model, "covariance_matrix",
+                            batch_diag(self.motion_model.noise_distribution.variance)).to(device)
+            S = H @ P @ H.mT + R
+            K = P @ H.mT @ torch.linalg.inv(S)
+
+            x = x + torch.einsum("...ij, ...j -> ...i", K, y)
+            P = (torch.eye(self.state_size, device=device) - K @ H) @ P
+
+        return {"loc": x, "covariance_matrix": P}

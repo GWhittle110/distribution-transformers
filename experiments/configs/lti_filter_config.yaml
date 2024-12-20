@@ -6,11 +6,11 @@ state_size: 1
 
 meta_prior_kwargs:
   scale_parametrisation: covariance_matrix
-  default_scale_multiple: 10
+  default_scale_multiple: 50
 
 observation_covariance_matrix:
-  obs_1: [[4.]]
-  obs_2: [[256.]]
+  obs_1: [[.1]]
+  obs_2: [[4.]]
 
 component_embedding_kwargs:
   hidden_layer_sizes: [32]
@@ -58,4 +58,5 @@ testing_kwargs:
   n_test_series: 1000
   plotting_kwargs:
     dim: 0
-    n_levels: 4
+  competitor_kwargs:
+    ekf

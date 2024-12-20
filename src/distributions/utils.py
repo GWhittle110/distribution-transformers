@@ -169,3 +169,11 @@ def gmm_bounds_func(phi: dict[str, Tensor], scale_parametrisation: str = "covari
     max_loc = phi["loc"].max().item()
     min_loc = phi["loc"].min().item()
     return min_loc - 4 * max_std, max_loc + 4 * max_std
+
+
+def batch_diag(batched_variance: Tensor):
+    batch_shape = batched_variance.shape[:-1]
+    event_size = batched_variance.size(-1)
+    cov = batched_variance.new_zeros(batch_shape + (event_size * event_size,))
+    cov[..., ::1 + event_size] = batched_variance
+    return cov.reshape(batch_shape + (event_size, event_size))

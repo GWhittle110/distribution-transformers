@@ -6,9 +6,10 @@ import torch
 from torch import Tensor
 from torch.nn import Identity
 from torch.func import vmap, jacrev
+from torch.distributions import MultivariateNormal
 
 from time import time
-from typing import Callable, Optional, Union
+from typing import Callable, Optional
 from copy import copy
 
 from model.distribution_transformer import DistributionTransformer
@@ -16,6 +17,7 @@ from distributions.distributions import CompleteDistribution, GaussianMixtureMod
 from distributions.utils import decode_gmm_sample, encode_gmm_sample, kl_divergence, plot_distributions, gmm_bounds_func
 from competitor_methods.variational_inference import GMMVI
 from competitor_methods.pfns import RiemannDistribution, PFN
+from competitor_methods.ekf import EKF
 from workflows.train import train_pfn
 from workflows.utils import get_model_size
 from dynamic.motion_models import LTIMotionModel
@@ -582,13 +584,23 @@ def test_lti_filter(model: DistributionTransformer,
         filter = LTIFilter(model, motion_model)
 
         start_time = time()
-        filtered_series = filter.filter(observation_series, motion_model.x0_distribution)
+        filtered_series_dict = filter.filter(observation_series, motion_model.x0_distribution)
         model_inference_time = time() - start_time
 
-        filtered_series_dict = decode_gmm_sample(filtered_series, scale_parametrisation)
         model_nll = -GaussianMixtureModel(**filtered_series_dict).log_prob(series)
         model_expected_nll = model_nll.mean().item()
         model_std_nll = model_nll.std().item()
+
+        if "ekf" in competitor_kwargs:
+            ekf = EKF(model.state_size, motion_model, **observation_model)
+
+            start_time = time()
+            ekf_filtered_series_dict = ekf.filter(observation_series, motion_model.x0_distribution)
+            ekf_inference_time = time() - start_time
+
+            ekf_nll = -MultivariateNormal(**ekf_filtered_series_dict).log_prob(series)
+            ekf_expected_nll = ekf_nll.mean().item()
+            ekf_std_nll = ekf_nll.std().item()
 
         # Single problem run
 
@@ -606,8 +618,13 @@ def test_lti_filter(model: DistributionTransformer,
         filter = LTIFilter(model, motion_model)
 
         start_time = time()
-        filtered_series = filter.filter(observation_series, motion_model.x0_distribution)
+        filtered_series_dict = filter.filter(observation_series, motion_model.x0_distribution)
         model_single_inference_time = time() - start_time
+
+        if "ekf" in competitor_kwargs:
+            start_time = time()
+            ekf_filtered_series_dict = ekf.filter(observation_series, motion_model.x0_distribution)
+            ekf_single_inference_time = time() - start_time
 
         if _run is not None:
             _run.info.update({
@@ -617,13 +634,19 @@ def test_lti_filter(model: DistributionTransformer,
                 "model_std_nll": model_std_nll,
                 "model_size": model_size
             })
+            if "ekf" in competitor_kwargs:
+                _run.info.update({
+                    "ekf_inference_time": ekf_inference_time,
+                    "ekf_single_inference_time": ekf_single_inference_time,
+                    "ekf_expected_nll": ekf_expected_nll,
+                    "ekf_std_nll": ekf_std_nll,
+                })
 
         # Plotting first dimension of state space
         if plotting_kwargs is not None:
             # Select dimension
             dim = plotting_kwargs["dim"]
 
-            filtered_series_dict = decode_gmm_sample(filtered_series, scale_parametrisation)
             filtered_series_dict["loc"] = filtered_series_dict["loc"][..., dim].unsqueeze(-1)
             filtered_series_dict[scale_parametrisation] = \
                 filtered_series_dict[scale_parametrisation].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
@@ -636,8 +659,14 @@ def test_lti_filter(model: DistributionTransformer,
             bounds = (max(bounds[0], series.max().item() + 1), min(bounds[1], series.min().item() - 1))
 
             filter_distribution = GaussianMixtureModel(**filtered_series_dict)
-
             model_series_plot = plot_filtered_series(filter_distribution, series, bounds, **plotting_kwargs)
+
+            if "ekf" in competitor_kwargs:
+                ekf_filter_distribution = MultivariateNormal(**ekf_filtered_series_dict)
+                ekf_series_plot = plot_filtered_series(ekf_filter_distribution, series, bounds, **plotting_kwargs)
 
             if _run is not None:
                 model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.png")
+
+                if "ekf" in competitor_kwargs:
+                    ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.png")

@@ -13,28 +13,28 @@ from typing import Callable
 class MotionModel:
 
     def __init__(self, state_size: int,
-                 mu: Callable[[Tensor, int], Tensor],
-                 sigma: Callable[[Tensor, int], Tensor],
+                 f: Callable[[Tensor, Tensor, int], Tensor],
                  x0_distribution: Distribution,
                  noise_distribution: Distribution):
         """
-        Base class for SDE-based state space motion models of the form x_k+1 = mu(x_k, k) + sigma(x_k, k)n_k where n_k
-        is multivariate normal distributed with zero mean and identity covariance matrix.
+        Base class for SDE-based state space motion models of the form x_k+1 = f(x_k, n_k, k) where n_k is process noise
+        distributed independently of x.
 
         Args:
             state_size: Size of state space.
-            mu: Drift component of motion SDE. Must return (batched) vector of shape state_size.
-            sigma: Diffusion component of motion SDE. Must return (batched) matrix of shape state_size X noise_size
+            f: Dynamics step function.
             x0_distribution: Distribution for initial state.
             noise_distribution: Distribution for noise process noise.
 
         """
         self.state_size = state_size
-        self.mu = mu
-        self.sigma = sigma
+        self.f = f
 
         self.x0_distribution = x0_distribution
         self.noise_distribution = noise_distribution
+
+    def to(self):
+        raise NotImplementedError
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         """
@@ -56,9 +56,7 @@ class MotionModel:
         trajectory_sample[0] = x0_sample
 
         for i, noise_sample in enumerate(noise_samples[1:], start=1):
-            trajectory_sample[i] = (self.mu(trajectory_sample[i-1], i-1)
-                                    + torch.einsum("...ij, ...j -> ...i", self.sigma(trajectory_sample[i-1], i-1),
-                                                   noise_sample))
+            trajectory_sample[i] = self.f(trajectory_sample[i-1], noise_sample, i-1)
 
         return trajectory_sample
 
@@ -66,26 +64,22 @@ class MotionModel:
 class TimeInvariantMotionModel(MotionModel):
 
     def __init__(self, state_size: int,
-                 mu: Callable[[Tensor], Tensor],
-                 sigma: Callable[[Tensor], Tensor],
+                 f: Callable[[Tensor, Tensor], Tensor],
                  x0_distribution: Distribution,
                  noise_distribution: Distribution):
         """
-        Base class for time-invariant SDE-based state space motion models of the form x_k+1 = mu(x_k) + sigma(x_k)n_k
-        where n_k is distributed according to noise_distribution
+        Base class for time-invariant SDE-based state space motion models of the form x_k+1 = f(x_k, n_k)
+        where n_k is process noise distributed according to noise_distribution.
 
         Args:
             state_size: Size of state space.
-            mu: Drift component of motion SDE. Must return (batched) vector of shape state_size.
-            sigma: Diffusion component of motion SDE. Must return (batched) matrix of shape state_size X noise_size,
-                where noise_size is the event shape of noise_distribution.
+            f: Dynamics step function.
             x0_distribution: Distribution for initial state.
             noise_distribution: Distribution for noise process noise.
 
         """
         super().__init__(state_size,
-                         lambda x, k: mu(x),
-                         lambda x, k: sigma(x),
+                         lambda x, n, k: f(x, n),
                          x0_distribution,
                          noise_distribution)
 
@@ -110,8 +104,8 @@ class LTIMotionModel(TimeInvariantMotionModel):
         noise_size = process_noise_scale_cholesky.shape[-1]
 
         super().__init__(state_size,
-                         lambda x: torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x),
-                         lambda x: process_noise_scale_cholesky,
+                         lambda x, n: torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x)
+                         + torch.einsum("...ij, ...j -> ...i", process_noise_scale_cholesky, n),
                          x0_distribution,
                          MultivariateNormal(torch.zeros(noise_size), torch.eye(noise_size)))
 

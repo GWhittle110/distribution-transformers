@@ -590,6 +590,19 @@ class ObservationModel(Distribution):
         """
         raise NotImplementedError
 
+    def conditional_mean(self, x: Tensor):
+        """
+        Get mean of distribution conditioned on state. Also conditions self in place.
+        Args:
+            x: State on which to condition.
+
+        Returns:
+            Mean of distribution conditioned on x.
+
+        """
+        self.condition_(x)
+        return self.distribution.mean
+
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         return self.distribution.sample(sample_shape=sample_shape).to(self.device)
 
