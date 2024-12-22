@@ -99,8 +99,11 @@ def train(model: DistributionTransformer,
     print(f'Using {device} device')
     device = torch.device(device)
     model.to(device)
+
     for p in model.parameters():
         p.register_hook(lambda grad: torch.clamp(grad, -max_grad, max_grad))
+
+    scale_parametrisation = model.component_embedding.scale_parametrisation
 
     if lr is None:
         lr = get_openai_lr(model) if lr is None else lr
@@ -133,13 +136,17 @@ def train(model: DistributionTransformer,
             before_forward = time.time()
             phi_in, phi_out = model(phi.to(device), **observations)
             forward_time = time.time() - before_forward
-            targets = x.reshape(batch_size, decode_gmm_sample(phi_in)["loc"].shape[-1]).to(device)
-            prior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_in)
+            targets = x.reshape(batch_size, decode_gmm_sample(phi_in, scale_parametrisation)["loc"].shape[-1]
+                                ).to(device)
+
+            prior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation)
                                                  ).log_prob(model.sample_space_transform(targets))
             prior_loss = torch.nanmean(prior_losses)
-            posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_out)
+
+            posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation)
                                                      ).log_prob(model.sample_space_transform(targets))
             posterior_loss = torch.nanmean(posterior_losses)
+
             total_loss = prior_loss + posterior_loss
             optimizer.zero_grad()
             total_loss.backward()
@@ -350,12 +357,7 @@ def train_pfn(model: PFN,
 
     for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
         epoch_start_time = time.time()
-        try:
-            with sdpa_kernel(SDPBackend.MATH):
-                epoch_metrics = train_epoch(epoch == 1)
-        except Exception as e:
-            print("Invalid epoch encountered, skipping...")
-            raise e
+        epoch_metrics = train_epoch(epoch == 1)
 
         if save_interval is not None and save_interval != -1 and save_interval % epoch == 0 and _run is not None:
             path = _run.observers[0].dir+"\\state_dicts\\pfns\\"

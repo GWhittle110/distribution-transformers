@@ -87,7 +87,7 @@ class TimeInvariantMotionModel(MotionModel):
 class LTIMotionModel(TimeInvariantMotionModel):
 
     def __init__(self, state_transition_matrix: Tensor,
-                 process_noise_scale_cholesky: Tensor,
+                 process_noise_scale_tril: Tensor,
                  x0_distribution: MultivariateNormal):
         """
         Linear time-invariant SDE-based state space motion models of the form x_k+1 = Ax_k + sqrt(Q)n_k
@@ -95,20 +95,21 @@ class LTIMotionModel(TimeInvariantMotionModel):
 
         Args:
             state_transition_matrix: State transition matrix, A. Must be of shape state_size X state_size.
-            process_noise_scale_cholesky: Cholesky decomposition of process noise covariance matrix, sqrt(Q). Must be of
+            process_noise_scale_tril: Cholesky decomposition of process noise covariance matrix, sqrt(Q). Must be of
                 shape state_size X noise_size.
             x0_distribution: Distribution for initial state.
 
         """
         state_size = state_transition_matrix.shape[-1]
-        noise_size = process_noise_scale_cholesky.shape[-1]
+        noise_size = process_noise_scale_tril.shape[-1]
 
         super().__init__(state_size,
                          lambda x, n: torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x)
-                         + torch.einsum("...ij, ...j -> ...i", process_noise_scale_cholesky, n),
+                         + torch.einsum("...ij, ...j -> ...i", process_noise_scale_tril, n),
                          x0_distribution,
                          MultivariateNormal(torch.zeros(noise_size), torch.eye(noise_size)))
 
         self.state_transition_matrix = state_transition_matrix
-        self.process_noise_covariance_matrix = process_noise_scale_cholesky @ process_noise_scale_cholesky.mT
+        self.process_noise_scale_tril = process_noise_scale_tril
+        self.process_noise_covariance_matrix = process_noise_scale_tril @ process_noise_scale_tril.mT
         self.x0_distribution: MultivariateNormal = x0_distribution

@@ -2,22 +2,23 @@ name: lti_filter
 module_path: "dynamic.lti_filter"
 
 n_components: 4
-state_size: 1
+state_size: 2
 
 meta_prior_kwargs:
-  scale_parametrisation: covariance_matrix
-  default_scale_multiple: 50
+  scale_eps: 0.00001
+  scale_parametrisation: scale_tril
+  default_scale_multiple: 16
 
 observation_covariance_matrix:
-  obs_1: [[1.]]
-  obs_2: [[4.]]
+  obs_1: [[.1]]
+  obs_2: [[1.]]
 
 component_embedding_kwargs:
   hidden_layer_sizes: [32]
   activation: gelu
-  jitter: 0.000001
+  jitter: 0.00001
   eps: 0.000001
-  scale_parametrisation: covariance_matrix
+  scale_parametrisation: scale_tril
 
 observation_embedding_kwargs:
   obs_1:
@@ -36,14 +37,14 @@ transformer_kwargs:
   activation: gelu
 
 motion_model_kwargs:
-  state_transition_matrix: [[.95]]
-  process_noise_scale_cholesky: [[1.]]
-  x0_loc: [0.]
-  x0_covariance_matrix: [[1.]]
+  state_transition_matrix: [[1., 0.6321], [0., 0.3679]]
+  process_noise_scale_cholesky: [[.1], [.2]]
+  x0_loc: [0., 0.]
+  x0_covariance_matrix: [[.01, 0.], [0., .01]]
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 20
+  epochs: 30
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.001

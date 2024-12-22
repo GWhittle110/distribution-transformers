@@ -15,7 +15,7 @@ from distributions.distributions import (GaussianMixtureModel, LinearGaussianObs
 
 def distribution_to_gmm(p: Distribution, n_components: int,
                         transform: Optional[Callable[[Tensor], Tensor]] = None,
-                        n_samples: int = 1000, scale_parametrisation: str = "covariance_matrix",
+                        n_samples: int = 1000, scale_parametrisation: str = "scale_tril",
                         *args, **kwargs) -> Tensor:
     """
     Approximate an arbitrary distribution p with a Gaussian mixture model with a specified number of components.

@@ -5,7 +5,7 @@ n_components: 2
 state_size: 1
 
 meta_prior_kwargs:
-  scale_parametrisation: covariance_matrix
+  scale_parametrisation: scale_tril
 
 observation_covariance_matrix:
   obs_1: [[1]]
@@ -18,7 +18,7 @@ component_embedding_kwargs:
   activation: gelu
   jitter: 0.000001
   eps: null
-  scale_parametrisation: covariance_matrix
+  scale_parametrisation: scale_tril
 
 observation_embedding_kwargs:
   obs_1:

@@ -150,7 +150,7 @@ class ComponentEmbedding(Embedding):
             w = torch.sigmoid(w)
             loc = x[..., 1:1 + state_size]
             scale_flat = x[..., 1 + state_size:]
-            diag = scale_flat[..., :self.state_size].exp() + jitter
+            diag = scale_flat[..., :self.state_size].clamp(-11., 14.).exp() + jitter
             scale = vec_to_tril_matrix(scale_flat[..., state_size:], -1) + torch.diag_embed(diag)
             if self.scale_parametrisation != "scale_tril":
                 scale = scale @ scale.mT

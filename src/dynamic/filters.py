@@ -82,10 +82,12 @@ class LTIFilter(Filter):
         init_weights = init_weights.unsqueeze(-1)
         init_weights = init_weights.broadcast_to(*x0_distribution.batch_shape, n_components, 1)
         init_loc = x0_distribution.loc.unsqueeze(-2)
-        init_covariance_matrix = x0_distribution.covariance_matrix.flatten(-2).unsqueeze(-2)
-        prior_params = torch.hstack([init_weights, init_loc.broadcast_to(init_weights.shape[:-1] + init_loc.shape[-1:]),
-                                     init_covariance_matrix.broadcast_to(init_weights.shape[:-1] +
-                                                                         init_covariance_matrix.shape[-1:])]
+
+        scale_parametrisation = self.model.component_embedding.scale_parametrisation
+        init_scale = getattr(x0_distribution, scale_parametrisation).flatten(-2).unsqueeze(-2)
+        prior_params = torch.hstack([init_weights, init_loc.broadcast_to(init_weights.shape[:-1]
+                                                                         + init_loc.shape[-1:]),
+                                     init_scale.broadcast_to(init_weights.shape[:-1] + init_scale.shape[-1:])]
                                     ).broadcast_to(*batch_shape, n_components, n_params).to(device)
 
         filtered_params = torch.empty(*batched_series_shape, n_components, n_params)
@@ -93,13 +95,34 @@ class LTIFilter(Filter):
         for i, observations in enumerate(zip(*observation_series.values())):
             _, posterior_params = self.model(prior_params, **dict(zip(observation_series, observations)))
             filtered_params[i] = posterior_params
-            prior_params_dict = decode_gmm_sample(posterior_params)
+            prior_params_dict = decode_gmm_sample(posterior_params, scale_parametrisation)
             prior_params_dict["loc"] = torch.einsum("...ij, ...j -> ...i",
                                                     state_transition_matrix, prior_params_dict["loc"])
-            prior_params_dict["covariance_matrix"] = (state_transition_matrix
-                                                      @ prior_params_dict["covariance_matrix"]
-                                                      @ state_transition_matrix.mT
-                                                      + process_noise_covariance_matrix)
-            prior_params = encode_gmm_sample(prior_params_dict)
+
+            match scale_parametrisation:
+                case "covariance_matrix":
+                    covariance_matrix = prior_params_dict["covariance_matrix"]
+                case "precision_matrix":
+                    covariance_matrix = prior_params_dict["precision_matrix"].inverse()
+                case "scale_tril":
+                    scale_tril = prior_params_dict["scale_tril"]
+                    covariance_matrix = scale_tril @ scale_tril.mT
+                case _:
+                    raise ValueError
+
+            covariance_matrix = (state_transition_matrix @ covariance_matrix @ state_transition_matrix.mT
+                                 + process_noise_covariance_matrix)
+
+            match scale_parametrisation:
+                case "covariance_matrix":
+                    prior_params_dict["covariance_matrix"] = covariance_matrix
+                case "precision_matrix":
+                    prior_params_dict["precision_matrix"] = covariance_matrix.inverse()
+                case "scale_tril":
+                    prior_params_dict["scale_tril"] = torch.linalg.cholesky(covariance_matrix)
+                case _:
+                    raise ValueError
+
+            prior_params = encode_gmm_sample(prior_params_dict, scale_parametrisation)
 
         return decode_gmm_sample(filtered_params)

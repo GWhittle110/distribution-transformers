@@ -66,9 +66,9 @@ class GaussianMixtureModel(MixtureSameFamily):
                          validate_args=validate_args)
         self.weights = weights
         self.loc = loc
-        self.covariance_matrix = covariance_matrix
-        self.precision_matrix = precision_matrix
-        self.scale_tril = scale_tril
+        self.covariance_matrix = self.component_distribution.base_dist.covariance_matrix
+        self.precision_matrix = self.component_distribution.base_dist.precision_matrix
+        self.scale_tril = self.component_distribution.base_dist.scale_tril
         self.n_components = weights.shape[-1]
         self.state_size = loc.shape[-1]
         if (covariance_matrix is not None) + (scale_tril is not None) + (
@@ -283,7 +283,7 @@ class GaussianMixtureModelConjugateMetaPrior(MetaPrior):
             case "precision_matrix":
                 scale = precision_matrix
             case "scale_tril":
-                scale = torch.linalg.cholesky(torch.linalg.inv(precision_matrix))
+                scale = torch.linalg.cholesky(precision_matrix, upper=True).inverse().mT
             case _:
                 raise AssertionError('scale_parametrisation must be one of "covariance_matrix", "precision_matrix" or '
                                      '"scale_tril"')

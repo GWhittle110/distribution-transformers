@@ -13,7 +13,7 @@ from typing import Optional, Callable
 import matplotlib.pyplot as plt
 
 
-def decode_gmm_sample(sample: Tensor, scale_parametrisation: str = "covariance_matrix"):
+def decode_gmm_sample(sample: Tensor, scale_parametrisation: str = "scale_tril"):
     """
     Decode a sequence representation GMM sample into a dict of parameters.
 
@@ -34,7 +34,7 @@ def decode_gmm_sample(sample: Tensor, scale_parametrisation: str = "covariance_m
     return {"weights": weights, "loc": loc, scale_parametrisation: scale}
 
 
-def encode_gmm_sample(sample: dict[str, Tensor], scale_parametrisation: str = "covariance_matrix"):
+def encode_gmm_sample(sample: dict[str, Tensor], scale_parametrisation: str = "scale_tril"):
     """
     Encode a parameter dict representation GMM sample as a sequence representation.
 
@@ -159,7 +159,7 @@ def plot_distributions(p: Distribution,
     return fig
 
 
-def gmm_bounds_func(phi: dict[str, Tensor], scale_parametrisation: str = "covariance_matrix") -> tuple[float, float]:
+def gmm_bounds_func(phi: dict[str, Tensor], scale_parametrisation: str = "scale_tril") -> tuple[float, float]:
     if scale_parametrisation == "precision_matrix":
         index = (phi[scale_parametrisation].flatten() / phi["weights"].flatten()).argmin()
         max_std = 1 / phi[scale_parametrisation][index].flatten().sqrt().item()

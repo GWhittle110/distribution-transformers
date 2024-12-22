@@ -659,11 +659,17 @@ def test_lti_filter(model: DistributionTransformer,
             bounds = (max(bounds[0], series.max().item() + 1), min(bounds[1], series.min().item() - 1))
 
             filter_distribution = GaussianMixtureModel(**filtered_series_dict)
-            model_series_plot = plot_filtered_series(filter_distribution, series, bounds, **plotting_kwargs)
+            model_series_plot = plot_filtered_series(filter_distribution, series[..., dim].unsqueeze(-1), bounds,
+                                                     **plotting_kwargs)
 
             if "ekf" in competitor_kwargs:
+                ekf_filtered_series_dict["loc"] = ekf_filtered_series_dict["loc"][..., dim].unsqueeze(-1)
+                ekf_filtered_series_dict["covariance_matrix"] = \
+                    ekf_filtered_series_dict["covariance_matrix"].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
+                        -1).unsqueeze(-1)
                 ekf_filter_distribution = MultivariateNormal(**ekf_filtered_series_dict)
-                ekf_series_plot = plot_filtered_series(ekf_filter_distribution, series, bounds, **plotting_kwargs)
+                ekf_series_plot = plot_filtered_series(ekf_filter_distribution, series[..., dim].unsqueeze(-1), bounds,
+                                                       **plotting_kwargs)
 
             if _run is not None:
                 model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.png")
