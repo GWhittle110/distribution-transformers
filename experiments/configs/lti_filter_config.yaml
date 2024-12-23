@@ -10,8 +10,8 @@ meta_prior_kwargs:
   default_scale_multiple: 16
 
 observation_covariance_matrix:
-  obs_1: [[.1]]
-  obs_2: [[1.]]
+  obs_1: [[1.]]
+  obs_2: [[.1]]
 
 component_embedding_kwargs:
   hidden_layer_sizes: [32]
@@ -40,7 +40,7 @@ motion_model_kwargs:
   state_transition_matrix: [[1., 0.6321], [0., 0.3679]]
   process_noise_scale_cholesky: [[.1], [.2]]
   x0_loc: [0., 0.]
-  x0_covariance_matrix: [[.01, 0.], [0., .01]]
+  x0_covariance_matrix: [[1., 0.], [0., 1.]]
 
 training_kwargs:
   warmup_epochs: 5

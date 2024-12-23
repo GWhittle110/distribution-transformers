@@ -604,7 +604,12 @@ class ObservationModel(Distribution):
         return self.distribution.mean
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
-        return self.distribution.sample(sample_shape=sample_shape).to(self.device)
+        sample = self.distribution.sample(sample_shape=sample_shape).to(self.device)
+        if len(self.distribution.event_shape) == 0:
+            sample = sample.unsqueeze(-1).unsqueeze(-1)
+        elif len(self.distribution.event_shape) == 1:
+            sample = sample.unsqueeze(-2)
+        return sample
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         device = value.device

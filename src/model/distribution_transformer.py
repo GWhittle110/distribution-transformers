@@ -151,8 +151,8 @@ class DistributionTransformer(nn.Module):
         phi_in_embedded = self.prior_embedding.embed(phi)
         phi_in = self.component_embedding.de_embed(phi_in_embedded)
         phi_in[..., 0] /= phi_in[..., 0].sum(dim=-1, keepdim=True)  # Normalise weights
-        z_embedded = torch.stack([observation_embedding(z[key])
-                                  for key, observation_embedding in self.observation_embeddings.items()], dim=-2)
+        z_embedded = torch.cat([observation_embedding(z[key])
+                                for key, observation_embedding in self.observation_embeddings.items()], dim=-2)
         phi_out_embedded = self.conditional_transformer(phi_in_embedded, z_embedded, tgt_is_causal=False)
         phi_out = self.component_embedding.de_embed(phi_out_embedded)
         phi_out[..., 0] /= phi_out[..., 0].sum(dim=-1, keepdim=True)  # Normalise weights
