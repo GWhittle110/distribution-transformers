@@ -272,8 +272,8 @@ class ObservationEmbedding(Embedding):
                  d_model: int,
                  transform: Optional[Callable[[Tensor], Tensor]] = None,
                  hidden_layer_sizes: Optional[Sequence[int]] = None,
-                 activation: Union[str, nn.Module] = nn.GELU()
-                 ):
+                 activation: Union[str, nn.Module] = nn.GELU(),
+                 sequential: bool = False):
         """
         Learnable embedding from arbitrary parametric distribution to GMM representation in model latent space.
         Note that this embedding is not invertible.
@@ -289,9 +289,13 @@ class ObservationEmbedding(Embedding):
             activation: Activation function between hidden layers in MLP embedding from transformed parameter
                 space to model latent space. "relu", "gelu" or a nn.Module subclass.
                 Defaults to GELU.
+            sequential: Whether to expect a sequence-ready observation input or not. If not, reshape input appropriately
+                for subsequent attention calculations.
+                Defaults to False.
 
         """
         self.observation_size = observation_size
+        self.sequential = sequential
 
         if hidden_layer_sizes is None:
             embedding_model = nn.Linear(observation_size, d_model)
@@ -304,6 +308,21 @@ class ObservationEmbedding(Embedding):
                          inverse_transform=None,
                          embedding_model=embedding_model,
                          de_embedding_model=None)
+
+    def embed(self, x: Tensor) -> Tensor:
+        """
+        Embed input tensor into model latent space.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Embedded tensor.
+
+        """
+        if not self.sequential:
+            x = x.unsqueeze(-2)
+        return super().embed(x)
 
     def de_embed(self, x: Tensor) -> Tensor:
         """

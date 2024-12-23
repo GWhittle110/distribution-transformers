@@ -301,8 +301,9 @@ class PFN(nn.Module):
     def forward(self, **z: Tensor) -> Tensor:
         assert z.keys() <= dict(self.observation_embeddings).keys(), \
             "Observation keys must have matching keys in observation_embeddings"
-        z_embedded = torch.stack([observation_embedding(z[key])
-                                  for key, observation_embedding in self.observation_embeddings.items()], dim=-2)
+
+        z_embedded = torch.cat([observation_embedding(z[key])
+                                for key, observation_embedding in self.observation_embeddings.items()], dim=-2)
         phi_out_embedded = self.transformer(z_embedded, is_causal=False)
         logits = self.de_embedding_model(phi_out_embedded[..., -1, :])
         return logits.softmax(dim=-1)
