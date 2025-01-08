@@ -5,7 +5,7 @@ Custom distributions used by the model for meta-priors, priors, likelihoods and 
 import torch
 from torch import Tensor
 from torch.distributions import (Distribution, Wishart, MultivariateNormal, Independent, Categorical,
-                                 MixtureSameFamily, Dirichlet, InverseGamma, Beta, constraints)
+                                 MixtureSameFamily, Dirichlet, InverseGamma, Beta, Normal, constraints)
 from torch.distributions.utils import lazy_property
 from torch.types import _size
 
@@ -912,7 +912,58 @@ class MappedScaleGaussianObservationModel(ScaleGaussianObservationModel):
         """
         self.device = x.device
         self.distribution = MultivariateNormal(loc=self.loc, **{self.scale_parametrisation:
-                                                                    self.mapping(x.cpu()).unsqueeze(-1).unsqueeze(-1)})
+                                                                self.mapping(x.cpu()).unsqueeze(-1).unsqueeze(-1)})
+
+
+class NormalisedDatasetGLMObservationModel(ObservationModel):
+    arg_constraints = {}
+
+    def __init__(self, n_features: int,
+                 n_datapoints: int,
+                 distribution: type[Distribution],
+                 inverse_link: Callable[[Tensor], dict[str, Tensor]] = lambda x: {"loc": x},
+                 **auxillary_params: Tensor):
+        """
+        Observation model for dataset and target modelled by a GLM with standardised features.
+
+        Args:
+            n_features: Number of features in the GLM.
+            n_datapoints: Number of datapoints in the conditioning dataset.
+            distribution: Distribution for target.
+            inverse_link: Inverse of link function, returning dictionary of parameters as a function of the evaluated
+                linear function of the features.
+            **auxillary_params: Any parameters not determined by inverse_link.
+        """
+        super().__init__()
+        self.n_features = n_features
+        self.n_datapoints = n_datapoints
+        self.target_distribution = distribution
+        self.inverse_link = inverse_link
+        self.auxillary_params = auxillary_params
+
+        self.weights: Optional[Tensor] = None
+        self.bias: Optional[Tensor] = None
+
+    def condition_(self, x: Tensor):
+        assert x.shape[-1] == self.n_features + 1, "number of weights + bias must match number of features + 1"
+        self.weights = x[..., :-1].broadcast_to(self.n_datapoints, *x.shape[:-1], -1).swapdims(0, -2)
+        self.bias = x[..., -1].broadcast_to(self.n_datapoints, *x.shape[:-1]).swapdims(0, -1)
+
+    def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
+        features = Normal(loc=torch.zeros(self.n_datapoints, self.n_features),
+                          scale=torch.ones(self.n_datapoints, self.n_features)
+                          ).sample(self.weights.shape[:-2] + sample_shape)
+        linked_mean = torch.einsum("...i, ...i -> ...", features, self.weights) + self.bias
+        targets = self.target_distribution(**self.inverse_link(linked_mean), **self.auxillary_params).sample()
+        return torch.cat([features, targets.unsqueeze(-1)], dim=-1)
+
+    def log_prob(self, value: torch.Tensor) -> Tensor:
+        device = value.device
+        features = value[..., :-1]
+        targets = value[..., -1]
+        linked_mean = torch.einsum("...i, ...i -> ...", features, self.weights) + self.bias
+        return self.target_distribution(**self.inverse_link(linked_mean), **self.auxillary_params
+                                        ).log_prob(targets.cpu()).to(device)
 
 
 class CompleteDistribution(Distribution):
