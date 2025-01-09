@@ -4,7 +4,7 @@ Extended Kalman filter competitor for filtering tasks
 
 import torch
 from torch import Tensor
-from torch.distributions import Distribution
+from torch.distributions import Distribution, constraints
 from torch.func import vmap, jacrev
 
 from functools import partial
@@ -20,6 +20,7 @@ class EKF(Filter):
 
     def __init__(self, state_size: int,
                  motion_model: MotionModel,
+                 jitter: float = 1e-6,
                  **observation_model: ObservationModel):
         """
         Extended Kalman Filter (EKF). Assumes Gaussianity and linearises dynamics and observations.
@@ -32,6 +33,7 @@ class EKF(Filter):
         self.state_size = state_size
         self.motion_model = motion_model
         self.observation_model = observation_model
+        self.jitter = jitter
 
     def filter(self, observation_series: dict[str, Tensor],
                x0_distribution: Distribution
@@ -129,25 +131,28 @@ class EKF(Filter):
         for key, observation in observations.items():
             observation_model = self.observation_model[key]
 
-            y = observation - observation_model.conditional_mean(x).to(device)
+            y = observation - observation_model.conditional_mean(x)
 
             if isinstance(observation_model, LinearGaussianObservationModel):
-                H = observation_model.observation_matrix.to(device)
-                R = observation_model.covariance_matrix.to(device)
+                H = observation_model.observation_matrix
+                R = observation_model.covariance_matrix
             elif isinstance(observation_model, MappedGaussianObservationModel):
-                H = vmap(jacrev(observation_model.mapping))(x)
-                R = observation_model.covariance_matrix.to(device)
+                H = vmap(jacrev(observation_model.mapping))(x).nan_to_num()
+                R = observation_model.covariance_matrix
             elif isinstance(observation_model, DirectGaussianObservationModel):
                 H = torch.eye(self.state_size, device=device)
-                R = observation_model.covariance_matrix.to(device)
+                R = observation_model.covariance_matrix
             else:
                 H = torch.stack([jacrev(observation_model.conditional_mean)(x_batch) for x_batch in x])
                 R = getattr(observation_model, "covariance_matrix",
-                            batch_diag(self.motion_model.noise_distribution.variance)).to(device)
+                            batch_diag(observation_model.conditional_variance(x)))
             S = H @ P @ H.mT + R
             K = P @ H.mT @ torch.linalg.inv(S)
 
             x = x + torch.einsum("...ij, ...j -> ...i", K, y)
             P = (torch.eye(self.state_size, device=device) - K @ H) @ P
+
+            while P.det().min() <= 0:
+                P[P.det() <= 0] += self.jitter * torch.eye(P.shape[-1], device=device)
 
         return {"loc": x, "covariance_matrix": P}

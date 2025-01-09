@@ -355,6 +355,8 @@ def train_pfn(model: PFN,
             "epoch_posterior_loss_series": epoch_posterior_loss_series
         }
 
+    epoch_metrics = {}
+
     for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
         epoch_start_time = time.time()
         epoch_metrics = train_epoch(epoch == 1)

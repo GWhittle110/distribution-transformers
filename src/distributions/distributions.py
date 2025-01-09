@@ -601,7 +601,28 @@ class ObservationModel(Distribution):
 
         """
         self.condition_(x)
+        return self.mean.unsqueeze(-1)
+
+    def conditional_variance(self, x: Tensor):
+        """
+        Get variance of distribution conditioned on state. Also conditions self in place.
+        Args:
+            x: State on which to condition.
+
+        Returns:
+            Variance of distribution conditioned on x.
+
+        """
+        self.condition_(x)
+        return self.variance.unsqueeze(-1)
+
+    @property
+    def mean(self) -> torch.Tensor:
         return self.distribution.mean
+
+    @property
+    def variance(self) -> torch.Tensor:
+        return self.distribution.variance
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         sample = self.distribution.sample(sample_shape=sample_shape).to(self.device)
