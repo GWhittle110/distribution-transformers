@@ -1,5 +1,6 @@
 name: gmm_closed_form
 module_path: "static.quantum_system"
+seed: 0
 
 n_components: 5
 

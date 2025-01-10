@@ -1,6 +1,7 @@
 """
 Main python file for running experiments. Pass the name of the config as an argument called from the command line.
 """
+import torch
 from sacred import Experiment
 from sacred.utils import apply_backspaces_and_linefeeds
 from importlib import import_module
@@ -21,5 +22,6 @@ def main(_config=None, _run=None):
 
     """
     experiment = import_module("experiments.sources." + _config["module_path"])
+    torch.manual_seed(_config["seed"])
     experiment.run(**_config, _run=_run)
 

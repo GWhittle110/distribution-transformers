@@ -1,5 +1,6 @@
 name: lti_filter
 module_path: "dynamic.lti_filter"
+seed: 0
 
 n_components: 4
 state_size: 4

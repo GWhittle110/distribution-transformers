@@ -15,7 +15,7 @@ from copy import copy
 from model.distribution_transformer import DistributionTransformer
 from distributions.distributions import CompleteDistribution, GaussianMixtureModel, ObservationModel
 from distributions.utils import decode_gmm_sample, encode_gmm_sample, kl_divergence, plot_distributions, gmm_bounds_func
-from competitor_methods.variational_inference import GMMVI
+from competitor_methods.variational_inference import VI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from competitor_methods.ekf import EKF
 from workflows.train import train_pfn
@@ -116,8 +116,8 @@ def test_conjugate_prior(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                       inverse_transform, **competitor_kwargs["vi"]).to(device)
+            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                    inverse_transform, **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)
@@ -257,8 +257,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                 n_kl_samples=n_kl_samples)
 
             if "vi" in competitor_kwargs:
-                vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                           inverse_transform)
+                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                        inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
                 vi.fit(z, **competitor_kwargs["vi"])
@@ -377,8 +377,8 @@ def test(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                       inverse_transform, **competitor_kwargs["vi"]).to(device)
+            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                    inverse_transform, **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)
@@ -499,8 +499,8 @@ def test(model: DistributionTransformer,
                                                           n_kl_samples=n_kl_samples)
 
             if "vi" in competitor_kwargs:
-                vi = GMMVI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                           inverse_transform)
+                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                        inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
                 vi.fit(z, **competitor_kwargs["vi"])

@@ -7,33 +7,30 @@ from torch import Tensor
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
-from torch.distributions import Distribution
+from torch.distributions import Distribution, MultivariateNormal
 from torch.distributions.utils import vec_to_tril_matrix
 from torch.func import vmap, jacrev
 
 from typing import Callable, Optional
 from tqdm import tqdm
 
-from distributions.distributions import GaussianMixtureModel, ObservationModel
+from distributions.distributions import ObservationModel
 
 
-class GMMVI(nn.Module):
+class VI(nn.Module):
 
-    def __init__(self, n_components: int,
-                 state_size: int,
+    def __init__(self, state_size: int,
                  prior: Distribution,
                  likelihood: dict[str, ObservationModel],
                  inverse_transform: Optional[Callable[[Tensor], Tensor]] = None,
-                 initial_logits_std: float = 1.,
                  initial_loc_std: float = 0.01,
                  initial_scale_tril_std: float = 0.01,
                  *args, **kwargs):
         """
-        Variational inference routine, fitting a Gaussian Mixture Model to the posterior by maximising an unbiased
+        Variational inference routine, fitting a Gaussian to the posterior by maximising an unbiased
         estimator of the ELBO.
 
         Args:
-            n_components: Number of GMM components.
             state_size: Size of sample space of posterior.
             prior: Prior distribution.
             likelihood: Dictionary of likelihood distributions / observation models.
@@ -54,29 +51,27 @@ class GMMVI(nn.Module):
         self.likelihood = likelihood
 
         # Distribution params
-        self.logits = nn.Parameter(initial_logits_std * torch.randn(*prior.batch_shape, n_components))
-        self.loc = nn.Parameter(initial_loc_std * torch.randn(*prior.batch_shape, n_components, state_size))
-        self.scale_flat = nn.Parameter(initial_scale_tril_std * torch.randn(*prior.batch_shape, n_components,
+        self.loc = nn.Parameter(initial_loc_std * torch.randn(*prior.batch_shape, state_size))
+        self.scale_flat = nn.Parameter(initial_scale_tril_std * torch.randn(*prior.batch_shape,
                                                                             state_size * (state_size + 1) // 2))
 
-    def distribution(self) -> GaussianMixtureModel:
+    def distribution(self) -> MultivariateNormal:
         """
         Get the current fitted distribution.
 
         Returns:
-            Fitted GMM.
+            Fitted Gaussian.
 
         """
-        weights = self.logits.softmax(dim=-1)
         loc = self.loc
         diag = self.scale_flat[..., :self.state_size].exp()
         scale = vec_to_tril_matrix(self.scale_flat[..., self.state_size:], -1) + torch.diag_embed(diag)
-        return GaussianMixtureModel(weights, loc, scale_tril=scale)
+        return MultivariateNormal(loc, scale_tril=scale)
 
     def prior_loss(self, n_samples: int = 1,
                    distribution: Optional[Distribution] = None) -> Tensor:
         """
-        KL divergence between GMM approximation for prior and the prior itself.
+        KL divergence between Gaussian approximation for prior and the prior itself.
 
         Args:
             n_samples: Number of samples with which to estimate ELBO.
@@ -95,7 +90,7 @@ class GMMVI(nn.Module):
                                                                 ).reshape(n_samples, *self.prior.batch_shape,
                                                                           self.state_size, self.state_size))
         prob = self.distribution().log_prob(x)
-        kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
+        # kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return kl.mean(dim=0)
 
     def posterior_loss(self, z: dict[str, Tensor],
@@ -199,7 +194,6 @@ class GMMVI(nn.Module):
 
         distribution = self.distribution()
         return {
-            "weights": distribution.weights,
             "loc": distribution.loc,
             "scale_tril": distribution.scale_tril
         }

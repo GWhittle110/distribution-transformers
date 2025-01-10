@@ -1,5 +1,6 @@
 name: gmm_closed_form
 module_path: "static.gmm_nonlinear"
+seed: 0
 
 n_components: 8
 state_size: 1

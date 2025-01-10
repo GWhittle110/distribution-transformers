@@ -1,5 +1,6 @@
 name: logistic_regression
 module_path: "static.logistic_regression"
+seed: 0
 
 n_components: 1
 

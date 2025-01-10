@@ -1,5 +1,6 @@
 name: gmm_closed_form
 module_path: "static.inverse_gamma_variance_closed_form"
+seed: 0
 
 n_components: 5
 
@@ -40,7 +41,7 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 20
+  epochs: 5
   steps_per_epoch: 100
   batch_size: 2000
   lr: 0.001
