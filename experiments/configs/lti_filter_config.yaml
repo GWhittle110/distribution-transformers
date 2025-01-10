@@ -1,25 +1,25 @@
 name: lti_filter
 module_path: "dynamic.lti_filter"
 
-n_components: 8
+n_components: 4
 state_size: 4
 
 meta_prior_kwargs:
   scale_eps: 0.0001
   scale_parametrisation: scale_tril
-  default_scale_multiple: 64
+  default_scale_multiple: 16
 
 observation_model_kwargs:
   obs_1:
     scale: .1
     rate: 1.
-    max_range: 30.
-    weights: [.79, .2, .01]
+    max_range: 10.
+    weights: [ .7, .2, .1 ]
   obs_2:
     scale: .1
 
 component_embedding_kwargs:
-  hidden_layer_sizes: [32]
+  hidden_layer_sizes: [ 32 ]
   activation: gelu
   jitter: 0.00001
   eps: 0.000001
@@ -27,14 +27,14 @@ component_embedding_kwargs:
 
 observation_embedding_kwargs:
   obs_1:
-    hidden_layer_sizes: [32]
+    hidden_layer_sizes: [ 32 ]
     activation: gelu
   obs_2:
-    hidden_layer_sizes: [32]
+    hidden_layer_sizes: [ 32 ]
     activation: gelu
 
 transformer_kwargs:
-  d_model: 32
+  d_model: 64
   n_head: 8
   dim_feedforward: 2048
   dropout: 0
@@ -42,16 +42,16 @@ transformer_kwargs:
   activation: gelu
 
 motion_model_kwargs:
-  state_transition_matrix: [[1., 0.6321, 0., 0.], [0., 0.3679, 0., 0.], [0., 0., 1., 0.6321], [0., 0., 0., 0.3679]]
-  process_noise_scale_cholesky: [[.1, 0.], [.2, 0.], [0., .1], [0., .2]]
-  x0_loc: [1., 0., 1., 0.]
-  x0_covariance_matrix: [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]]
+  state_transition_matrix: [ [ 1., 0.6321, 0., 0. ], [ 0., 0.3679, 0., 0. ], [ 0., 0., 1., 0.6321 ], [ 0., 0., 0., 0.3679 ] ]
+  process_noise_scale_cholesky: [ [ .1, 0. ], [ .2, 0. ], [ 0., .1 ], [ 0., .2 ] ]
+  x0_loc: [ 1., 0., 1., 0. ]
+  x0_covariance_matrix: [ [ 1., 0., 0., 0. ], [ 0., 1., 0., 0. ], [ 0., 0., 1., 0. ], [ 0., 0., 0., 1. ] ]
 
 training_kwargs:
   warmup_epochs: 5
   epochs: 100
   steps_per_epoch: 100
-  batch_size: 2000
+  batch_size: 5000
   lr: 0.001
   weight_decay: 0
   verbose: True

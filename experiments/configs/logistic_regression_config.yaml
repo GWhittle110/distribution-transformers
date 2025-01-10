@@ -1,7 +1,7 @@
 name: logistic_regression
 module_path: "static.logistic_regression"
 
-n_components: 4
+n_components: 1
 
 meta_prior_kwargs:
   scale_eps: 0.00001
@@ -35,7 +35,7 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 30
+  epochs: 10
   steps_per_epoch: 100
   batch_size: 100
   lr: 0.001
@@ -46,3 +46,17 @@ training_kwargs:
   save_loss_series: False
 
 testing_kwargs:
+  n_test_priors: 250
+  n_kl_samples: 1000
+  plot: False
+  competitor_kwargs:
+    vi:
+      lr: 0.02
+      lr_decay: 0.999
+      n_iters: 10000
+      n_samples: 10
+      ewma_gamma: 0.01
+      progress_bar: True
+      initial_logits_std: 1.
+      initial_loc_std: .01
+      initial_scale_tril_std: 0.01

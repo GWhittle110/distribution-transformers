@@ -363,8 +363,10 @@ def test(model: DistributionTransformer,
                                                         .reshape(model_posterior.batch_shape
                                                                  + model_posterior.event_shape).to(device))
         model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
-                                            (x.reshape(model_posterior.batch_shape).to(device)
-                                             ).reshape(*prior.batch_shape, 1, 1))
+                                            (x.reshape(model_posterior.batch_shape
+                                                       + model_posterior.event_shape).to(device)
+                                             ).reshape(prior.batch_shape + model_posterior.event_shape
+                                                       + model_posterior.event_shape))
         model_posterior_expected_nll = model_posterior_nll.mean().item()
         model_posterior_std_nll = model_posterior_nll.std().item()
 
@@ -385,8 +387,10 @@ def test(model: DistributionTransformer,
                                                  .reshape(model_posterior.batch_shape
                                                           + model_posterior.event_shape).to(device))
             vi_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
-                                   (x.reshape(model_posterior.batch_shape).to(device)
-                                    ).reshape(*prior.batch_shape, 1, 1))
+                                   (x.reshape(model_posterior.batch_shape
+                                              + model_posterior.event_shape).to(device)
+                                    ).reshape(prior.batch_shape + model_posterior.event_shape
+                                              + model_posterior.event_shape))
             vi_expected_nll = vi_nll.mean().item()
             vi_std_nll = vi_nll.std().item()
             vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)

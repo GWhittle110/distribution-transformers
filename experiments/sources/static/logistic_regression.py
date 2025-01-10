@@ -2,15 +2,14 @@
 Experiment to validate method against closed form posterior of GMM prior with linear Gaussian observations
 """
 
-import torch
-from torch import Tensor
 from torch.distributions import Bernoulli
 
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, NormalisedDatasetGLMObservationModel,
-                                         CompleteDistribution, GaussianMixtureModel)
+                                         CompleteDistribution)
 from model.embeddings import ComponentEmbedding, ObservationEmbedding
 from model.distribution_transformer import DistributionTransformer
 from workflows.train import train
+from workflows.test import test
 
 
 def run(n_components: int,
@@ -29,10 +28,8 @@ def run(n_components: int,
 
     Args:
         n_components: Number of GMM components.
-        state_size: Dimensionality of GMM.
         meta_prior_kwargs: Dictionary of parameters for the meta prior.
-        observation_covariance_matrix: Dictionary of covariance matrices for gaussian observations.
-        observation_matrix: Dictionary of observation matrices for gaussian observations.
+        observation_model_kwargs: Dictionary of dictionaries of observation model kwargs.
         component_embedding_kwargs: Dictionary of component embedding parameters.
         observation_embedding_kwargs: Dictionary of dictionaries of observation embedding parameters.
         transformer_kwargs: Dictionary of parameters for the transformer model.
@@ -73,3 +70,5 @@ def run(n_components: int,
                                     **observation_embedding)
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
+
+    test(model, complete_distribution, _run=_run, **testing_kwargs)

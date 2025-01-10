@@ -967,8 +967,8 @@ class NormalisedDatasetGLMObservationModel(ObservationModel):
 
     def condition_(self, x: Tensor):
         assert x.shape[-1] == self.n_features + 1, "number of weights + bias must match number of features + 1"
-        self.weights = x[..., :-1].broadcast_to(self.n_datapoints, *x.shape[:-1], -1).swapdims(0, -2)
-        self.bias = x[..., -1].broadcast_to(self.n_datapoints, *x.shape[:-1]).swapdims(0, -1)
+        self.weights = x[..., :-1].broadcast_to(self.n_datapoints, *x.shape[:-1], -1).movedim(0, -2)
+        self.bias = x[..., -1].broadcast_to(self.n_datapoints, *x.shape[:-1]).movedim(0, -1)
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         features = Normal(loc=torch.zeros(self.n_datapoints, self.n_features),
@@ -979,12 +979,11 @@ class NormalisedDatasetGLMObservationModel(ObservationModel):
         return torch.cat([features, targets.unsqueeze(-1)], dim=-1)
 
     def log_prob(self, value: torch.Tensor) -> Tensor:
-        device = value.device
         features = value[..., :-1]
         targets = value[..., -1]
         linked_mean = torch.einsum("...i, ...i -> ...", features, self.weights) + self.bias
         return self.target_distribution(**self.inverse_link(linked_mean), **self.auxillary_params
-                                        ).log_prob(targets.cpu()).to(device)
+                                        ).log_prob(targets).sum(dim=-1)
 
 
 class CompleteDistribution(Distribution):
