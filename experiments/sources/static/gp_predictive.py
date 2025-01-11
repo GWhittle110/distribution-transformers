@@ -21,7 +21,7 @@ from distributions.distributions import (InverseGammaMetaPrior, ObservationModel
 from model.distribution_transformer import DistributionTransformer
 from distributions.utils import gmm_bounds_func
 from workflows.train import train
-from workflows.test import test
+from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 
 class ExactGPModel(gpytorch.models.ExactGP):
@@ -142,11 +142,9 @@ class GaussianProcessPrior(Distribution):
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         return self.get_target_y_distribution().sample(sample_shape).squeeze(-1)
 
-    
     def log_prob(self, value: torch.Tensor):
         return self.get_target_y_distribution().log_prob(value.unsqueeze(-1)).squeeze(-1)
             
-
     def sample_fulldataset(self) -> Tensor:
 
         dataset_size = torch.randint(
@@ -180,7 +178,7 @@ class GPPredictiveObservationModel(ObservationModel):
         self.n_observations = Dx.shape[-1]
         
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        self.likelihood.noise = 0.1
+        self.likelihood.noise = 0.001
 
         self.gp_posterior = ExactGPModel(
             self.x, self.y, self.likelihood, gp_prior.mean_function, gp_prior.kernel
@@ -247,13 +245,14 @@ class CompleteDistributionGPPredictive(CompleteDistribution):
         else:
             phi = self.prior_sample
         phi_decoded = self.meta_prior.decode_sample(phi)
-        prior = self.prior( **phi_decoded)
+        prior = self.prior(**phi_decoded)
         Dx, x, y = prior.sample_fulldataset()
         for observation_model in self.observation_model.values():
             observation_model.condition_(Dx, x, y, prior)
         z = {key: observation_model.sample() for key, observation_model in self.observation_model.items()}
 
         return phi, y, z
+    
 
 def run(n_components: int,
         state_size: int,
@@ -288,7 +287,8 @@ def run(n_components: int,
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    test(model, complete_distribution,
+    test_gp(model, complete_distribution,
          bounds_func=partial(gmm_bounds_func,
                              scale_parametrisation=component_embedding_kwargs["scale_parametrisation"]),
+         linspace_size=1000,
          _run=_run, **testing_kwargs)
