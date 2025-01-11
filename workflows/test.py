@@ -2,11 +2,13 @@
 Testing workflow
 """
 
+import gpytorch
+from matplotlib import pyplot as plt
 import torch
 from torch import Tensor
 from torch.nn import Identity
 from torch.func import vmap, jacrev
-from torch.distributions import MultivariateNormal
+from torch.distributions import MultivariateNormal, Distribution
 
 from time import time
 from typing import Callable, Optional
@@ -23,6 +25,9 @@ from workflows.utils import get_model_size
 from dynamic.motion_models import LTIMotionModel
 from dynamic.filters import LTIFilter
 from dynamic.utils import plot_filtered_series
+
+from gpytorch.kernels import RBFKernel, ScaleKernel
+from gpytorch.means import ConstantMean
 
 
 def test_conjugate_prior(model: DistributionTransformer,
@@ -679,3 +684,329 @@ def test_lti_filter(model: DistributionTransformer,
 
                 if "ekf" in competitor_kwargs:
                     ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.png")
+
+
+class ExactGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood, mean_module, covar_module):
+        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = mean_module
+        self.covar_module = covar_module
+    
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+def plot_gp(predicted_gp_posterior: Distribution,
+            true_gp_posterior: Distribution,
+            train_X: torch.Tensor,
+            train_Y: torch.Tensor,
+            linspace_points: int,
+            x_domain_size: float) -> plt.Figure:
+    """
+    Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
+
+    Args:
+        predicted_gp_posterior: Predicted distributions over y values at consequtive x's.
+        true_gp_posterior: True distributions over y values at consequtive x's.
+
+    Returns:
+        Figure object.
+
+    """
+
+    fig, ax = plt.subplots()
+
+    x = torch.linspace(0, x_domain_size, linspace_points)
+
+    if isinstance(predicted_gp_posterior, GaussianMixtureModel):
+        mean_predicted = predicted_gp_posterior.loc.flatten()
+        std_predicted = predicted_gp_posterior.covariance_matrix.flatten() ** 0.5
+        upper_confidence_predicted = mean_predicted + 1.96 * std_predicted
+        lower_confidence_predicted = mean_predicted - 1.96 * std_predicted
+    else:
+        raise NotImplementedError()
+        
+    mean_true = true_gp_posterior.loc.flatten()
+    std_true = torch.diag(true_gp_posterior.covariance_matrix) ** 0.5
+    upper_confidence_true = mean_true + 1.96 * std_true
+    lower_confidence_true = mean_true - 1.96 * std_true
+
+    ax.plot(x, mean_predicted.cpu(), color='blue', label="Predicted")
+    ax.fill_between(x, lower_confidence_predicted.cpu(), upper_confidence_predicted.cpu(), color='blue', alpha=0.2)
+
+    ax.plot(x, mean_true.cpu(), color='orange', label="True")
+    ax.fill_between(x, lower_confidence_true.cpu(), upper_confidence_true.cpu(), color='orange', alpha=0.2)
+
+    ax.scatter(train_X.cpu(), train_Y.cpu(), label="Training Data")
+
+    ax.set_title("X")
+    ax.set_ylabel("Y")
+    ax.legend(loc="best")
+    plt.show()
+    return fig
+
+def test_gp(model: DistributionTransformer,
+         complete_distribution: CompleteDistribution,
+         competitor_kwargs: Optional[dict[str, dict]] = None,
+         inverse_transform: Optional[Callable[[Tensor], Tensor]] = None,
+         n_test_priors: int = 1000,
+         n_kl_samples: int = 10000,
+         plot: bool = False,
+         bounds_func: Optional[Callable[[dict[str, Tensor]], tuple[float, float]]] = None,
+         gpu_device: str = "cuda:0",
+         linspace_size:int = 1000,
+         _run=None
+         ) -> None:
+    """
+    Standard testing routine for experiments not involving conjugate priors
+
+    Args:
+        model: Model to Test.
+        complete_distribution: Complete distribution over priors, state and observation.
+        competitor_kwargs: Dictionary of dictionaries of parameters for competitor methods.
+            Defaults to None.
+        inverse_transform: Transform from sample space of GMM approximation to prior.
+            Defaults to None.
+        n_test_priors: Number of priors to test model with.
+            Defaults to 1000.
+        n_kl_samples: Number of samples to take when computing KL divergences.
+            Defaults to 10000.
+        plot: Whether to plot.
+            Defaults to False.
+        gpu_device: GPU device.
+            Defaults to "cuda:0".
+        bounds_func: Function to calculate plotting bounds from exact distribution parameters.
+            Defaults to an estimate of the 5-95%ile from 10000 samples
+        _run: Sacred run object.
+
+    """
+
+    with torch.no_grad():
+        competitor_kwargs = dict() if competitor_kwargs is None else competitor_kwargs
+
+        device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+
+        scale_parametrisation = model.component_embedding.scale_parametrisation
+
+        # Test inputs
+        phi, x, z = complete_distribution.sample((n_test_priors,))
+
+        # Device
+        phi = phi.to(device)
+        z = {key: val.to(device) for key, val in z.items()}
+        model = model.to(device)
+
+        # Exact prior
+        phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+
+        # Model solution
+        start_time = time()
+        phi_in, phi_out = model(phi.to(device), **z)
+        model_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
+
+        prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
+                                            n_kl_samples)
+        model_expected_prior_kl_divergence = prior_kl_divergence.mean().item()
+        model_std_prior_kl_divergence = prior_kl_divergence.std().item()
+
+        model_posterior_nll = -model_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(model_posterior.batch_shape
+                                                                 + model_posterior.event_shape).to(device))
+        model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape
+                                                       + model_posterior.event_shape).to(device)
+                                             ).reshape(prior.batch_shape + model_posterior.event_shape
+                                                       + model_posterior.event_shape))
+        model_posterior_expected_nll = model_posterior_nll.mean().item()
+        model_posterior_std_nll = model_posterior_nll.std().item()
+
+        model_size = get_model_size(model)
+
+        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence.mean().item()}")
+
+        if "vi" in competitor_kwargs:
+            # VI solution
+            before_vi = time()
+            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                    inverse_transform, **competitor_kwargs["vi"]).to(device)
+            torch.set_grad_enabled(True)
+            vi.fit(z, **competitor_kwargs["vi"])
+            torch.set_grad_enabled(False)
+            vi_time = time() - before_vi
+            vi_nll = -vi.distribution().log_prob(model.sample_space_transform(x)
+                                                 .reshape(model_posterior.batch_shape
+                                                          + model_posterior.event_shape).to(device))
+            vi_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                   (x.reshape(model_posterior.batch_shape
+                                              + model_posterior.event_shape).to(device)
+                                    ).reshape(prior.batch_shape + model_posterior.event_shape
+                                              + model_posterior.event_shape))
+            vi_expected_nll = vi_nll.mean().item()
+            vi_std_nll = vi_nll.std().item()
+            vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
+            vi_expected_elbo = vi_elbo.mean().item()
+            vi_std_elbo = vi_elbo.std().item()
+            model_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=model_posterior)
+            model_expected_elbo = model_elbo.mean().item()
+            model_std_elbo = model_elbo.std().item()
+
+        if "pfns" in competitor_kwargs:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "pfns only supported for univariate output distributions"
+            # PFN solution
+            pfn_kwargs = copy(competitor_kwargs["pfns"])
+            del pfn_kwargs["training_kwargs"]
+            pfn = PFN(**pfn_kwargs, **model.observation_embeddings)
+            torch.set_grad_enabled(True)
+            pfn, _ = train_pfn(pfn, complete_distribution, _run=_run, **competitor_kwargs["pfns"]["training_kwargs"])
+            torch.set_grad_enabled(False)
+            pfn = pfn.to(device)
+            start_time = time()
+            phi_out = pfn(**z)
+            pfn_inference_time = time() - start_time
+            pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
+
+            pfn_nll = -pfn_posterior.log_prob(x.reshape(pfn_posterior.batch_shape).to(device))
+            pfn_expected_nll = pfn_nll.mean().item()
+            pfn_std_nll = pfn_nll.std().item()
+
+            pfn_size = get_model_size(pfn)
+
+            if "vi" in competitor_kwargs:
+                pfn_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=pfn_posterior,
+                                              inverse_transform=Identity())
+                pfn_expected_elbo = pfn_elbo.mean().item()
+                pfn_std_elbo = pfn_elbo.std().item()
+
+        # Single problem run
+
+        # Test inputs
+        phi, x, z = complete_distribution.sample()
+
+        x_domain_size = complete_distribution.meta_prior.decode_sample(phi)["x_domain_size"]
+        z["query"] = torch.linspace(0, x_domain_size, linspace_size).reshape(
+            linspace_size, 1
+        )
+
+        train_x = z["dataset"][:, 0]
+        train_y = z["dataset"][:, 0]
+        hyperparams = complete_distribution.meta_prior.decode_sample(phi)
+
+        z["dataset"] = z["dataset"].unsqueeze(0).expand((linspace_size,) + z["dataset"].shape)
+        phi = phi.unsqueeze(0).expand((linspace_size,) + phi.shape)
+
+        # Device
+        model.cpu()
+
+        phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+
+        # Model solution
+        start_time = time()
+        phi_in, phi_out = model(phi, **z)
+        model_single_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
+
+        kernel = ScaleKernel(RBFKernel())
+        kernel.base_kernel.lengthscale = prior.lengthscale
+        kernel.outputscale = hyperparams['covariance_matrix']**0.5
+
+        mean_function = ConstantMean()
+        mean_function.constant = hyperparams['loc']
+
+        exact_gp = ExactGPModel(train_x, train_y, complete_distribution.observation_model["dataset"].likelihood, mean_function, kernel)
+        exact_gp.eval()
+
+        true_posterior = exact_gp(z["query"].flatten())
+
+        if _run is not None:
+            _run.info.update({
+                "model_expected_prior_kl_divergence": model_expected_prior_kl_divergence,
+                "model_std_prior_kl_divergence": model_std_prior_kl_divergence,
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
+                "model_posterior_expected_nll": model_posterior_expected_nll,
+                "model_posterior_std_nll": model_posterior_std_nll,
+                "model_size": model_size,
+            })
+            if "vi" in competitor_kwargs:
+                _run.info.update({
+                    "vi_time": vi_time,
+                    "model_expected_elbo": model_expected_elbo,
+                    "model_std_elbo": model_std_elbo,
+                    "vi_expected_elbo": vi_expected_elbo,
+                    "vi_std_elbo": vi_std_elbo,
+                    "vi_expected_nll": vi_expected_nll,
+                    "vi_std_nll": vi_std_nll
+                })
+            if "pfns" in competitor_kwargs:
+                _run.info.update({
+                    "pfn_inference_time": pfn_inference_time,
+                    "pfn_expected_nll": pfn_expected_nll,
+                    "pfn_std_nll": pfn_std_nll,
+                    "pfn_size": pfn_size
+                })
+                if "vi" in competitor_kwargs:
+                    _run.info.update({
+                        "pfn_expected_elbo": pfn_expected_elbo,
+                        "pfn_std_elbo": pfn_std_elbo,
+                    })
+
+        # Plotting
+        if plot:
+            if bounds_func is None:
+                def bounds_func(params_dict: dict[str, Tensor]) -> tuple[float, float]:
+                    dist = complete_distribution.meta_prior.prior(**params_dict)
+                    samples = dist.sample((10000,))
+                    samples = samples.sort().values
+                    return samples[499].item(), samples[9499].item()
+
+            #prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
+            #                                bounds_func(phi_prior_dict), n_kl_samples=n_kl_samples)
+
+            model_posterior_plot = plot_gp(model_posterior, true_posterior, train_x, train_y, linspace_size, x_domain_size)
+
+
+            if "vi" in competitor_kwargs:
+                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+                        inverse_transform)
+                torch.set_grad_enabled(True)
+                start_time = time()
+                vi.fit(z, **competitor_kwargs["vi"])
+                vi_single_time = time() - start_time
+                torch.set_grad_enabled(False)
+                vi_posterior = vi.distribution()
+                #vi_posterior_plot = plot_distributions(vi_posterior, model_posterior, model.sample_space_transform,
+                #                                       model.sample_space_transform, bounds_func(phi_prior_dict),
+                #                                       n_kl_samples=None)
+
+            if "pfns" in competitor_kwargs:
+                pfn = pfn.cpu()
+                start_time = time()
+                phi_out = pfn(**z)
+                pfn_single_inference_time = time() - start_time
+                pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
+                #pfn_posterior_plot = plot_distributions(pfn_posterior, model_posterior, None,
+                #                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                #                                        n_kl_samples=None)
+
+            if _run is not None:
+                #prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
+                
+                model_posterior_plot.savefig(_run.observers[0].dir + "\\model_posterior_plot.png")
+                if "vi" in competitor_kwargs:
+                    _run.info.update({
+                        "vi_single_time": vi_single_time
+                    })
+                    #vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.png")
+
+                if "pfns" in competitor_kwargs:
+                    #pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.png")
+                    _run.info.update({
+                        "pfn_single_inference_time": pfn_single_inference_time
+                    })
