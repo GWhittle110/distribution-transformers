@@ -43,7 +43,7 @@ class RiemannDistribution(Distribution):
         """
         super().__init__(event_shape=torch.Size(), batch_shape=probs.shape[:-1])
 
-        assert borders.shape[-1] == probs.shape[-1] + 1, "number of bucket probs must equal to number of borders + 1"
+        assert borders.shape[-1] == probs.shape[-1] + 1, "number of borders must equal to number of probs + 1"
         self.probs = probs / probs.sum(dim=-1, keepdim=True)
 
         if isinstance(infinite_support, bool):
@@ -57,6 +57,7 @@ class RiemannDistribution(Distribution):
             if self.left_infinite_support else torch.ones(self.batch_shape, device=borders.device)
         self.right_variance = 2.2 * borders.diff()[..., -1] ** 2 \
             if self.right_infinite_support else torch.ones(self.batch_shape, device=borders.device)
+        self.complete_borders = borders
         self.borders = borders[..., self.left_infinite_support:-1 if self.right_infinite_support else None]
 
         self.bucket_log_probs = self.probs[..., self.left_infinite_support:-1
@@ -84,6 +85,31 @@ class RiemannDistribution(Distribution):
                * (idx.swapdims(0, -1) == max_idx)).nan_to_num()
                + bucket_log_probs.gather(-1, idx).swapdims(0, -1))
         return ret.reshape(torch.broadcast_shapes(value_shape, self.batch_shape))
+
+    def conf(self, percentile: float) -> Tensor:
+        lower = torch.zeros(*self.batch_shape, self.probs.shape[-1]) + (1 - percentile) / 2
+        upper = torch.ones(*self.batch_shape, self.probs.shape[-1]) - (1 - percentile) / 2
+        cdf = self.probs.cumsum(dim=-1)
+        lower_idx = torch.argmin((cdf - lower) + ((cdf - lower) < 1e-6), dim=-1)
+        upper_idx = torch.argmin((cdf - upper) + ((cdf - upper) < -1e-6), dim=-1)
+        lower_lower_boundary = torch.gather(self.complete_borders, -1, lower_idx.unsqueeze(-1))
+        lower_upper_boundary = torch.gather(self.complete_borders, -1, lower_idx.unsqueeze(-1) + 1)
+        lower_cdf = torch.hstack([torch.zeros(*cdf.shape[:-1], 1), cdf])
+        lower_lower_boundary_cdf = torch.gather(lower_cdf, -1, lower_idx.unsqueeze(-1))
+        lower_upper_boundary_cdf = torch.gather(cdf, -1, lower_idx.unsqueeze(-1))
+        upper_lower_boundary = torch.gather(self.complete_borders, -1, upper_idx.unsqueeze(-1))
+        upper_upper_boundary = torch.gather(self.complete_borders, -1, upper_idx.unsqueeze(-1) + 1)
+        upper_lower_boundary_cdf = torch.gather(cdf, -1, upper_idx.unsqueeze(-1) - 1)
+        upper_upper_boundary_cdf = torch.gather(cdf, -1, upper_idx.unsqueeze(-1))
+        lower_confidence = (lower_upper_boundary - (lower_upper_boundary - lower_lower_boundary) *
+                            (lower_upper_boundary_cdf - lower[..., 0].reshape(lower_lower_boundary.shape)) /
+                            (lower_upper_boundary_cdf - lower_lower_boundary_cdf)
+                            * (1 + (lower_idx == 0) * self.left_infinite_support))
+        upper_confidence = (upper_lower_boundary + (upper_upper_boundary - upper_lower_boundary) *
+                            (upper[..., 0].reshape(upper_lower_boundary.shape) - upper_lower_boundary_cdf) /
+                            (upper_upper_boundary_cdf - upper_lower_boundary_cdf)
+                            * (1 + (upper_idx == cdf.shape[-1] - 1) * self.right_infinite_support))
+        return torch.stack([lower_confidence.squeeze(-1), upper_confidence.squeeze(-1)], dim=-1)
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
         device = self.borders.device

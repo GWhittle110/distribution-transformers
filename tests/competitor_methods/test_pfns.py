@@ -102,6 +102,42 @@ class TestRiemannDistribution:
         sample = p.sample(sample_shape)
         assert sample.shape == expected_shape
 
+    @pytest.mark.parametrize(
+        ("weights", "borders", "infinite_support", "percentile", "expected_result"),
+        [
+            (
+                    torch.tensor([1., 1., 1.]),
+                    torch.tensor([-1., 0., 1., 2.]),
+                    True,
+                    0.99,
+                    torch.tensor([-1.970, 2.970])
+            ),
+            (
+                    torch.tensor([[1., 1., 1.]] * 2),
+                    torch.tensor([[-1., 0., 1., 2.]] * 2),
+                    (True, False),
+                    0.99,
+                    torch.tensor([[-1.970, 1.985]] * 2)
+            ),
+            (
+                    torch.tensor([[1., 1., 1.]] * 2),
+                    torch.tensor([[-1., 0., 1., 2.]] * 2),
+                    (False, False),
+                    0.99,
+                    torch.tensor([[-0.985, 1.985]] * 2)
+            ),
+
+        ]
+    )
+    def test_conf(self, weights: Tensor,
+                  borders: Tensor,
+                  infinite_support: Union[bool, tuple[bool, bool]],
+                  percentile: float,
+                  expected_result: Tensor):
+        p = RiemannDistribution(weights, borders, infinite_support)
+        conf = p.conf(percentile)
+        assert torch.allclose(conf, expected_result)
+
 
 @pytest.mark.parametrize(
     ("prior", "n_buckets", "infinite_support", "leftmost_border", "rightmost_border", "expected_result"),
