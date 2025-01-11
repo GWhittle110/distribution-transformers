@@ -89,7 +89,7 @@ class VI(nn.Module):
         kl -= torch.logdet(vmap(jacrev(self.inverse_transform))(x.reshape(-1, self.state_size)
                                                                 ).reshape(n_samples, *self.prior.batch_shape,
                                                                           self.state_size, self.state_size))
-        prob = self.distribution().log_prob(x)
+        # prob = self.distribution().log_prob(x)
         # kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return kl.mean(dim=0)
 

@@ -57,13 +57,12 @@ testing_kwargs:
   plot: True,
   competitor_kwargs:
     vi:
-      lr: 0.01
+      lr: 0.1
       lr_decay: 0.999
-      n_iters: 10000
+      n_iters: 1000
       n_samples: 10
       ewma_gamma: 0.01
       progress_bar: True
-      initial_logits_std: 1.
       initial_loc_std: 0.1
       initial_scale_tril_std: 0.1
     pfns:
@@ -81,7 +80,7 @@ testing_kwargs:
       activation: gelu
       training_kwargs:
         warmup_epochs: 5
-        epochs: 20
+        epochs: 5
         steps_per_epoch: 100
         batch_size: 5000
         lr: 0.001

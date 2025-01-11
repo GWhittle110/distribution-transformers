@@ -116,7 +116,7 @@ def test_conjugate_prior(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
+            vi = VI(model.state_size, prior, complete_distribution.observation_model,
                     inverse_transform, **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
@@ -257,8 +257,7 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                 n_kl_samples=n_kl_samples)
 
             if "vi" in competitor_kwargs:
-                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                        inverse_transform)
+                vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
                 vi.fit(z, **competitor_kwargs["vi"])

@@ -58,6 +58,5 @@ testing_kwargs:
       n_samples: 10
       ewma_gamma: 0.01
       progress_bar: True
-      initial_logits_std: 1.
       initial_loc_std: .01
       initial_scale_tril_std: 0.01
