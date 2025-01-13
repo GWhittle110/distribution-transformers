@@ -828,8 +828,8 @@ def test_gp(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                    inverse_transform, **competitor_kwargs["vi"]).to(device)
+            vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform,
+                    **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)
@@ -966,12 +966,12 @@ def test_gp(model: DistributionTransformer,
             #prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
             #                                bounds_func(phi_prior_dict), n_kl_samples=n_kl_samples)
 
-            model_posterior_plot = plot_gp(model_posterior, true_posterior, train_x, train_y, linspace_size, x_domain_size)
+            model_posterior_plot = plot_gp(model_posterior, true_posterior, train_x, train_y, linspace_size,
+                                           x_domain_size)
 
 
             if "vi" in competitor_kwargs:
-                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                        inverse_transform)
+                vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
                 vi.fit(z, **competitor_kwargs["vi"])
