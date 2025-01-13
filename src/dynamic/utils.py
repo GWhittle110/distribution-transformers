@@ -11,9 +11,10 @@ def plot_filtered_series(filter_distribution: Distribution,
                          series: Optional[Tensor] = None,
                          bounds: Optional[tuple[float, float]] = None,
                          n_vertical: int = 1000,
+                         axis_label: str = "Horizontal Displacement",
                          *args,
                          **kwargs) -> plt.Figure:
-    plt.style.use(['seaborn-v0_8-paper', 'seaborn-v0_8-whitegrid'])
+    plt.style.use(['seaborn-v0_8-paper'])
 
     if bounds is None:
         assert series is not None, "series_bounds cannot be inferred if true_series is not provided"
@@ -26,6 +27,9 @@ def plot_filtered_series(filter_distribution: Distribution,
     fig = plt.figure()
     plt.pcolormesh(X, Y, Z, cmap="BuPu")
     plt.plot(series, "k")
-    plt.colorbar()
+    plt.colorbar(label="Filter Density")
+    plt.xlabel("Time / s")
+    plt.ylabel(axis_label)
+    plt.legend(["Actual Trajectory"])
     plt.show()
     return fig

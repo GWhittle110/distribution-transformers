@@ -155,8 +155,8 @@ def plot_distributions(p: Distribution,
             ax.annotate(f"KL Divergence: {kl_divergence(p, q, q_transform, n_kl_samples):5.4f}",
                         (0.6, 0.9), xycoords="axes fraction")
 
-    ax.set_title("Density plot")
-    ax.set_ylabel("Density")
+    ax.set_ylabel("Probability Density")
+    ax.set_xlabel("Sample Space")
     plt.show()
     return fig
 

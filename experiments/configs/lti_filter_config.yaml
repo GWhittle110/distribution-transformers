@@ -50,7 +50,7 @@ motion_model_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 100
+  epochs: 5
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.001
