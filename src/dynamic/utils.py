@@ -13,6 +13,8 @@ def plot_filtered_series(filter_distribution: Distribution,
                          n_vertical: int = 1000,
                          *args,
                          **kwargs) -> plt.Figure:
+    plt.style.use(['seaborn-v0_8-paper', 'seaborn-v0_8-whitegrid'])
+
     if bounds is None:
         assert series is not None, "series_bounds cannot be inferred if true_series is not provided"
         bounds = (series.max().item() + 1., series.min().item() - 1.)

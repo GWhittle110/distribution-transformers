@@ -249,12 +249,10 @@ def test_conjugate_prior(model: DistributionTransformer,
 
 
             prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
-                                            bounds_func(phi_prior_dict),
-                                            n_kl_samples=n_kl_samples)
+                                            bounds_func(phi_prior_dict))
 
             posterior_plot = plot_distributions(exact_posterior, model_posterior, None, model.sample_space_transform,
-                                                bounds_func(phi_posterior_dict),
-                                                n_kl_samples=n_kl_samples)
+                                                bounds_func(phi_posterior_dict))
 
             if "vi" in competitor_kwargs:
                 vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
@@ -277,16 +275,16 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                         None, bounds_func(phi_posterior_dict))
 
             if _run is not None:
-                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
-                posterior_plot.savefig(_run.observers[0].dir + "\\posterior_plot.png")
+                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.svg", format="svg")
+                posterior_plot.savefig(_run.observers[0].dir + "\\posterior_plot.svg", format="svg")
                 if "vi" in competitor_kwargs:
                     _run.info.update({
                         "vi_single_time": vi_single_time
                     })
-                    vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.png")
+                    vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.svg", format="svg")
 
                 if "pfns" in competitor_kwargs:
-                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.png")
+                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.svg", format="svg")
                     _run.info.update({
                         "pfn_single_inference_time": pfn_single_inference_time
                     })
@@ -376,8 +374,8 @@ def test(model: DistributionTransformer,
         if "vi" in competitor_kwargs:
             # VI solution
             before_vi = time()
-            vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                    inverse_transform, **competitor_kwargs["vi"]).to(device)
+            vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform,
+                    **competitor_kwargs["vi"]).to(device)
             torch.set_grad_enabled(True)
             vi.fit(z, **competitor_kwargs["vi"])
             torch.set_grad_enabled(False)
@@ -498,8 +496,7 @@ def test(model: DistributionTransformer,
                                                           n_kl_samples=n_kl_samples)
 
             if "vi" in competitor_kwargs:
-                vi = VI(model.n_components, model.state_size, prior, complete_distribution.observation_model,
-                        inverse_transform)
+                vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
                 torch.set_grad_enabled(True)
                 start_time = time()
                 vi.fit(z, **competitor_kwargs["vi"])
@@ -521,17 +518,17 @@ def test(model: DistributionTransformer,
                                                         n_kl_samples=None)
 
             if _run is not None:
-                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
+                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.svg", format="svg")
                 if len(competitor_kwargs) == 0:
-                    model_posterior_plot.savefig(_run.observers[0].dir + "\\model_posterior_plot.png")
+                    model_posterior_plot.savefig(_run.observers[0].dir + "\\model_posterior_plot.svg", format="svg")
                 if "vi" in competitor_kwargs:
                     _run.info.update({
                         "vi_single_time": vi_single_time
                     })
-                    vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.png")
+                    vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.svg", format="svg")
 
                 if "pfns" in competitor_kwargs:
-                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.png")
+                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.svg", format="svg")
                     _run.info.update({
                         "pfn_single_inference_time": pfn_single_inference_time
                     })
@@ -675,7 +672,7 @@ def test_lti_filter(model: DistributionTransformer,
                                                        **plotting_kwargs)
 
             if _run is not None:
-                model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.png")
+                model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.svg", format="svg")
 
                 if "ekf" in competitor_kwargs:
-                    ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.png")
+                    ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.svg", format="svg")

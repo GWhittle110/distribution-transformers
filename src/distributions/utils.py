@@ -103,7 +103,7 @@ def plot_distributions(p: Distribution,
                        q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        bounds: tuple[float, float] = (-5., 5.),
                        n_points: int = 1000,
-                       n_kl_samples: Optional[int] = 10000) -> plt.Figure:
+                       n_kl_samples: Optional[int] = None) -> plt.Figure:
     """
     Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
 
@@ -132,6 +132,8 @@ def plot_distributions(p: Distribution,
         Figure object.
 
     """
+    plt.style.use(['seaborn-v0_8-paper'])
+
     points = torch.linspace(*bounds, steps=n_points)
     if p_transform is None:
         p_transform = Identity()

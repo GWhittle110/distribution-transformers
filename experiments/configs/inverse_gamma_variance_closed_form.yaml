@@ -5,10 +5,10 @@ seed: 0
 n_components: 5
 
 meta_prior_kwargs:
-  concentration_concentration: 10000
-  concentration_rate: 10000
-  rate_concentration: 10000
-  rate_rate: 10000
+  concentration_concentration: 10
+  concentration_rate: 10
+  rate_concentration: 10
+  rate_rate: 10
 
 observation_loc:
   obs_1: [0]
@@ -34,17 +34,17 @@ observation_embedding_kwargs:
 transformer_kwargs:
   d_model: 64
   n_head: 8
-  dim_feedforward: 2048
+  dim_feedforward: 256
   dropout: 0
   num_layers: 6
   activation: gelu
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 5
+  epochs: 10
   steps_per_epoch: 100
-  batch_size: 2000
-  lr: 0.001
+  batch_size: 5000
+  lr: 0.005
   weight_decay: 0
   verbose: True
   progress_bar: True
@@ -59,7 +59,7 @@ testing_kwargs:
     vi:
       lr: 0.1
       lr_decay: 0.999
-      n_iters: 1000
+      n_iters: 2000
       n_samples: 10
       ewma_gamma: 0.01
       progress_bar: True
@@ -69,7 +69,7 @@ testing_kwargs:
       transformer_kwargs:
         d_model: 64
         n_head: 8
-        dim_feedforward: 2048
+        dim_feedforward: 256
         dropout: 0
         num_layers: 6
         activation: gelu
@@ -80,10 +80,10 @@ testing_kwargs:
       activation: gelu
       training_kwargs:
         warmup_epochs: 5
-        epochs: 5
+        epochs: 10
         steps_per_epoch: 100
         batch_size: 5000
-        lr: 0.001
+        lr: 0.0001
         weight_decay: 0
         max_grad: 10.
         verbose: True
