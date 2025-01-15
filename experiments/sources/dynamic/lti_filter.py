@@ -11,7 +11,7 @@ from typing import Optional
 
 from torch.types import _size
 
-from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, MappedGaussianObservationModel,
+from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior,
                                          CompleteDistribution, ObservationModel)
 from model.embeddings import ComponentEmbedding, ObservationEmbedding
 from model.distribution_transformer import DistributionTransformer

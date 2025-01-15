@@ -103,7 +103,8 @@ def plot_distributions(p: Distribution,
                        q_transform: Optional[Callable[[Tensor], Tensor]] = None,
                        bounds: tuple[float, float] = (-5., 5.),
                        n_points: int = 1000,
-                       n_kl_samples: Optional[int] = None) -> plt.Figure:
+                       n_kl_samples: Optional[int] = None,
+                       legend: Optional[list[str]] = None) -> plt.Figure:
     """
     Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
 
@@ -148,7 +149,9 @@ def plot_distributions(p: Distribution,
         q_density = torch.exp(q.log_prob(q_transform(points).reshape((n_points,) + q.event_shape))
                               + torch.log(vmap(jacrev(q_transform))(points).reshape((-1,) + p.batch_shape)))
         ax.plot(points, q_density)
-        ax.legend(["p", "q"])
+        if legend is None:
+            legend = ["Exact", "Approximate"]
+        ax.legend(legend)
         if n_kl_samples:
             if p_transform == q_transform:
                 q_transform = Identity()

@@ -249,10 +249,12 @@ def test_conjugate_prior(model: DistributionTransformer,
 
 
             prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
-                                            bounds_func(phi_prior_dict))
+                                            bounds_func(phi_prior_dict), n_kl_samples=None,
+                                            legend=["Exact Prior", "Distribution Transformer"])
 
             posterior_plot = plot_distributions(exact_posterior, model_posterior, None, model.sample_space_transform,
-                                                bounds_func(phi_posterior_dict))
+                                                bounds_func(phi_posterior_dict), n_kl_samples=None,
+                                                legend=["Exact Posterior", "Distribution Transformer"])
 
             if "vi" in competitor_kwargs:
                 vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
@@ -263,7 +265,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 torch.set_grad_enabled(False)
                 vi_posterior = vi.distribution()
                 vi_posterior_plot = plot_distributions(exact_posterior, vi_posterior, None,
-                                                       model.sample_space_transform, bounds_func(phi_posterior_dict))
+                                                       model.sample_space_transform, bounds_func(phi_posterior_dict),
+                                                       n_kl_samples=None, legend=["Exact Posterior", "SVI"])
 
             if "pfns" in competitor_kwargs:
                 pfn = pfn.cpu()
@@ -272,7 +275,8 @@ def test_conjugate_prior(model: DistributionTransformer,
                 pfn_single_inference_time = time() - start_time
                 pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
                 pfn_posterior_plot = plot_distributions(exact_posterior, pfn_posterior, None,
-                                                        None, bounds_func(phi_posterior_dict))
+                                                        None, bounds_func(phi_posterior_dict),
+                                                        n_kl_samples=None, legend=["Exact Posterior", "PFN"])
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -489,11 +493,12 @@ def test(model: DistributionTransformer,
                     return samples[499].item(), samples[9499].item()
 
             prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
-                                            bounds_func(phi_prior_dict), n_kl_samples=n_kl_samples)
+                                            bounds_func(phi_prior_dict), n_kl_samples=None,
+                                            legend=["Exact Prior", "Distribution Transformer"])
 
             if len(competitor_kwargs) == 0:
                 model_posterior_plot = plot_distributions(model_posterior, None, model.sample_space_transform,
-                                                          n_kl_samples=n_kl_samples)
+                                                          n_kl_samples=None)
 
             if "vi" in competitor_kwargs:
                 vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
@@ -505,7 +510,7 @@ def test(model: DistributionTransformer,
                 vi_posterior = vi.distribution()
                 vi_posterior_plot = plot_distributions(vi_posterior, model_posterior, model.sample_space_transform,
                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
-                                                       n_kl_samples=None)
+                                                       n_kl_samples=None, legend=["SVI", "Distribution Transformer"])
 
             if "pfns" in competitor_kwargs:
                 pfn = pfn.cpu()
@@ -515,7 +520,7 @@ def test(model: DistributionTransformer,
                 pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
                 pfn_posterior_plot = plot_distributions(pfn_posterior, model_posterior, None,
                                                         model.sample_space_transform, bounds_func(phi_prior_dict),
-                                                        n_kl_samples=None)
+                                                        n_kl_samples=None, legend=["PFN", "Distribution Transformer"])
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
