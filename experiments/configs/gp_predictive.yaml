@@ -44,11 +44,11 @@ transformer_kwargs:
   activation: gelu
 
 training_kwargs:
-  warmup_epochs: 1
-  epochs: 1
-  steps_per_epoch: 1
-  batch_size: 5000
-  lr: 0.001
+  warmup_epochs: 5
+  epochs: 20
+  steps_per_epoch: 100
+  batch_size: 50000
+  lr: 0.00003
   weight_decay: 0
   verbose: True
   progress_bar: True
@@ -73,9 +73,9 @@ testing_kwargs:
       hidden_layer_sizes: [32]
       activation: gelu
       training_kwargs:
-        warmup_epochs: 15
-        epochs: 1
-        steps_per_epoch: 1
+        warmup_epochs: 5
+        epochs: 20
+        steps_per_epoch: 100
         batch_size: 5000
         lr: 0.0001
         weight_decay: 0
