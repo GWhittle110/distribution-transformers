@@ -722,7 +722,10 @@ def plot_gp(predicted_gp_posterior: Distribution,
         upper_confidence_predicted = mean_predicted + 1.96 * std_predicted
         lower_confidence_predicted = mean_predicted - 1.96 * std_predicted
     else:
-        raise NotImplementedError()
+        mean_predicted = predicted_gp_posterior.mean
+        confidence_predicted = predicted_gp_posterior.conf(1 - 0.025)
+        lower_confidence_predicted = confidence_predicted[..., 0].flatten()
+        upper_confidence_predicted = confidence_predicted[..., 1].flatten()
 
     mean_true = true_gp_posterior.loc.flatten()
     std_true = torch.diag(true_gp_posterior.covariance_matrix) ** 0.5
@@ -988,9 +991,8 @@ def test_gp(model: DistributionTransformer,
                 phi_out = pfn(**z)
                 pfn_single_inference_time = time() - start_time
                 pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
-                #pfn_posterior_plot = plot_distributions(pfn_posterior, model_posterior, None,
-                #                                        model.sample_space_transform, bounds_func(phi_prior_dict),
-                #                                        n_kl_samples=None)
+                pfn_posterior_plot = plot_gp(pfn_posterior, true_posterior, train_x, train_y, linspace_size,
+                                           x_domain_size)
 
             if _run is not None:
                 #prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
@@ -1003,7 +1005,7 @@ def test_gp(model: DistributionTransformer,
                     #vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.png")
 
                 if "pfns" in competitor_kwargs:
-                    #pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.png")
+                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.png")
                     _run.info.update({
                         "pfn_single_inference_time": pfn_single_inference_time
                     })
