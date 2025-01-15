@@ -135,6 +135,17 @@ class RiemannDistribution(Distribution):
                 + left_normal_sample * ((buckets == 0) * self.left_infinite_support)
                 + right_normal_sample * (buckets == max_bucket) * self.right_infinite_support)
 
+    @property
+    def mean(self) -> Tensor:
+        mean = torch.sum((self.borders[..., :-1] + self.borders.diff(dim=-1) / 2)
+                         * self.probs[..., self.left_infinite_support:-1 if self.right_infinite_support else None],
+                         dim=-1)
+        if self.left_infinite_support:
+            mean += self.probs[..., 0] * (self.borders[..., 0] - 0.8 * self.left_variance.sqrt())
+        if self.right_infinite_support:
+            mean += self.probs[..., -1] * (self.borders[..., -1] + 0.8 * self.right_variance.sqrt())
+        return mean
+
     @lazy_property
     def weights(self):
         return self.probs
