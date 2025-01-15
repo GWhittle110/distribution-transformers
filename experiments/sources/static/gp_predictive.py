@@ -66,7 +66,7 @@ class MeanScaleMetaPrior(MetaPrior):
         return sample_dict
 
     def encode_sample(self, decoded_sample: dict[str, Tensor]) -> Tensor:
-        return torch.Tensor([decoded_sample[k] for k in self.metapriors_keylist])
+        return torch.tensor([decoded_sample[k] for k in self.metapriors_keylist])
     
     def sample(self, sample_shape):
         sampled_values = []
@@ -117,9 +117,11 @@ class GaussianProcessPrior(Distribution):
         self.kernel = ScaleKernel(RBFKernel(), batch_shape=self.hyperparameter_batch_shape)
         self.kernel.base_kernel.lengthscale = self.lengthscale
         self.kernel.outputscale = self.covariance_matrix**0.5
+        self.kernel.to(self.covariance_matrix.device)
 
         self.mean_function = ConstantMean(batch_shape=self.hyperparameter_batch_shape)
         self.mean_function.constant = self.loc
+        self.mean_function.to(self.loc.device)
 
         # Mean is constant and kernel is stationary; prior of y is same regardless of x
         self.x_distribution = Uniform(0, self.x_domain_size)
@@ -133,7 +135,7 @@ class GaussianProcessPrior(Distribution):
         return torch.Size([1])
 
     def get_target_y_distribution(self):
-        x = self.x_distribution.sample((1,))
+        x = self.x_distribution.sample((1,)).to(self.loc.device)
         return MultivariateNormal(
             loc=self.mean_function(x),
             covariance_matrix=add_jitter(self.kernel(x).to_dense())
