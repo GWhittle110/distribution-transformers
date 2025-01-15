@@ -136,6 +136,7 @@ class TestRiemannDistribution:
                   expected_result: Tensor):
         p = RiemannDistribution(weights, borders, infinite_support)
         conf = p.conf(percentile)
+        assert conf.shape == expected_result.shape
         assert torch.allclose(conf, expected_result)
 
 

@@ -104,11 +104,11 @@ class RiemannDistribution(Distribution):
         lower_confidence = (lower_upper_boundary - (lower_upper_boundary - lower_lower_boundary) *
                             (lower_upper_boundary_cdf - lower[..., 0].reshape(lower_lower_boundary.shape)) /
                             (lower_upper_boundary_cdf - lower_lower_boundary_cdf)
-                            * (1 + (lower_idx == 0) * self.left_infinite_support))
+                            * (1 + (lower_idx.unsqueeze(-1) == 0) * self.left_infinite_support))
         upper_confidence = (upper_lower_boundary + (upper_upper_boundary - upper_lower_boundary) *
                             (upper[..., 0].reshape(upper_lower_boundary.shape) - upper_lower_boundary_cdf) /
                             (upper_upper_boundary_cdf - upper_lower_boundary_cdf)
-                            * (1 + (upper_idx == cdf.shape[-1] - 1) * self.right_infinite_support))
+                            * (1 + (upper_idx.unsqueeze(-1) == cdf.shape[-1] - 1) * self.right_infinite_support))
         return torch.stack([lower_confidence.squeeze(-1), upper_confidence.squeeze(-1)], dim=-1)
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
