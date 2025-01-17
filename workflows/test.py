@@ -805,6 +805,7 @@ def test_gp(model: DistributionTransformer,
         start_time = time()
         phi_in, phi_out = model(phi.to(device), **z)
         model_inference_time = time() - start_time
+
         model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
@@ -893,7 +894,7 @@ def test_gp(model: DistributionTransformer,
         )
 
         train_x = z["dataset"][:, 0]
-        train_y = z["dataset"][:, 0]
+        train_y = z["dataset"][:, 1]
         hyperparams = complete_distribution.meta_prior.decode_sample(phi)
 
         z["dataset"] = z["dataset"].unsqueeze(0).expand((linspace_size,) + z["dataset"].shape)
