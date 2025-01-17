@@ -103,7 +103,7 @@ class GaussianProcessPrior(Distribution):
         self.loc = loc
         self.covariance_matrix = covariance_matrix
         self.weights = weights
-        self.hyperparameter_batch_shape = self.loc.shape
+        self.hyperparameter_batch_shape = self.loc.shape[:-1]
         
         super().__init__()
 
@@ -114,13 +114,13 @@ class GaussianProcessPrior(Distribution):
         self.x_domain_size = x_domain_size
         self.lengthscale = lengthscale
 
-        self.kernel = ScaleKernel(RBFKernel(), batch_shape=self.hyperparameter_batch_shape)
+        self.kernel = ScaleKernel(RBFKernel(), batch_shape=self.hyperparameter_batch_shape, event_shape=torch.Size([1]))
         self.kernel.base_kernel.lengthscale = self.lengthscale
-        self.kernel.outputscale = self.covariance_matrix**0.5
+        self.kernel.outputscale = self.covariance_matrix[..., 0]**0.5
         self.kernel.to(self.covariance_matrix.device)
 
-        self.mean_function = ConstantMean(batch_shape=self.hyperparameter_batch_shape)
-        self.mean_function.constant = self.loc
+        self.mean_function = ConstantMean(batch_shape=self.hyperparameter_batch_shape, event_shape=torch.Size([1]))
+        self.mean_function.constant = self.loc[..., 0]
         self.mean_function.to(self.loc.device)
 
         # Mean is constant and kernel is stationary; prior of y is same regardless of x
@@ -154,11 +154,10 @@ class GaussianProcessPrior(Distribution):
             self.dataset_size_high, 
             [1]
         ).item()
-        n_observations = dataset_size + 1
         
         x_distribution = Uniform(0, self.x_domain_size)
-        Dx = x_distribution.sample((n_observations,))
-        x = x_distribution.sample((1,))
+        Dx = x_distribution.sample(self.hyperparameter_batch_shape + (dataset_size, 1))
+        x = x_distribution.sample(self.hyperparameter_batch_shape +  (1, 1))
         y = self.get_target_y_distribution().sample()
         return Dx, x, y
 
@@ -194,18 +193,14 @@ class GPPredictiveObservationModel(ObservationModel):
             Dy = self.conditional_distribution.sample()
             return torch.cat(
                 [
-                    self.Dx.view(
-                        (1,) * len(self.hyperparameter_batch_shape) + (self.n_observations,)
-                    ).expand(
-                        self.hyperparameter_batch_shape + (self.n_observations,)
-                    ).transpose(-1,-2), 
-                    Dy.transpose(-1,-2)
+                    self.Dx, 
+                    Dy.unsqueeze(-1)
                 ],
                 dim=-1
             )
         
         elif self.observation_type == "query":
-            return self.x.reshape((1,) * len(self.hyperparameter_batch_shape)).expand(self.hyperparameter_batch_shape)
+            return self.x.squeeze(-2)
         
     def conditional_mean(self, x: Tensor):
         """

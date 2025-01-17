@@ -2,18 +2,18 @@ name: gp_predictive
 module_path: "static.gp_predictive"
 seed: 0
 
-n_components: 8
+n_components: 1
 state_size: 1
 
 meta_prior_kwargs:
-  dataset_size_low: 5
-  dataset_size_high: 15
+  dataset_size_low: 10
+  dataset_size_high: 11
   x_domain_size: 5
   lengthscale: 0.5
-  output_scale_low: 0.5
-  output_scale_high: 1.5
-  constant_mean_low: -1.0
-  constant_mean_high: 1.0
+  output_scale_low: 0.9
+  output_scale_high: 1.1
+  constant_mean_low: -0.5
+  constant_mean_high: 0.5
 
 observation_covariance_matrix:
   obs_1: [[10]]
@@ -28,11 +28,11 @@ component_embedding_kwargs:
 
 observation_embedding_kwargs:
   dataset:
-    hidden_layer_sizes: [32]
+    hidden_layer_sizes: [32, 32]
     activation: gelu
     sequential: True
   query:
-    hidden_layer_sizes: [32]
+    hidden_layer_sizes: [32, 32]
     activation: gelu
 
 transformer_kwargs:
@@ -45,10 +45,10 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 20
+  epochs: 100
   steps_per_epoch: 100
-  batch_size: 50000
-  lr: 0.00003
+  batch_size: 500
+  lr: 0.001
   weight_decay: 0
   verbose: True
   progress_bar: True
@@ -70,14 +70,14 @@ testing_kwargs:
         activation: gelu
       n_buckets: 24
       infinite_support: True
-      hidden_layer_sizes: [32]
+      hidden_layer_sizes: [32, 32]
       activation: gelu
       training_kwargs:
         warmup_epochs: 5
-        epochs: 20
+        epochs: 30
         steps_per_epoch: 100
-        batch_size: 5000
-        lr: 0.0001
+        batch_size: 500
+        lr: 0.001
         weight_decay: 0
         verbose: True
         progress_bar: True
