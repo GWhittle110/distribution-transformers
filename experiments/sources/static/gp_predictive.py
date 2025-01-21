@@ -7,7 +7,7 @@ from typing import Optional
 import gpytorch
 import torch
 from torch import Tensor
-from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal
+from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal, Independent
 from torch.distributions.utils import lazy_property
 from torch.types import _size
 
@@ -51,7 +51,7 @@ class MeanScaleMetaPrior(MetaPrior):
             "covariance_matrix": Uniform(kwargs.get("output_scale_low"), kwargs.get("output_scale_high")),
         }       
 
-        self.prior_args_keylist = ["dataset_size_low", "dataset_size_high", "x_domain_size", "lengthscale"]
+        self.prior_args_keylist = ["dataset_size_low", "dataset_size_high", "x_domain_size", "lengthscale", "x_dimensions"]
         self.prior_args = dict()
 
         for metaprior_param in self.prior_args_keylist:
@@ -95,6 +95,7 @@ class GaussianProcessPrior(Distribution):
                  dataset_size_low: int,
                  dataset_size_high: int,
                  x_domain_size: float, 
+                 x_dimensions: int,
                  lengthscale: float,
                  loc: Tensor = torch.zeros(torch.Size()), 
                  covariance_matrix: Tensor = torch.ones(torch.Size()),
@@ -124,7 +125,7 @@ class GaussianProcessPrior(Distribution):
         self.mean_function.to(self.loc.device)
 
         # Mean is constant and kernel is stationary; prior of y is same regardless of x
-        self.x_distribution = Uniform(0, self.x_domain_size)
+        self.x_distribution = Uniform(0, torch.Tensor([self.x_domain_size] * x_dimensions))
 
     @property
     def batch_shape(self):
@@ -155,9 +156,9 @@ class GaussianProcessPrior(Distribution):
             [1]
         ).item()
         
-        x_distribution = Uniform(0, self.x_domain_size)
-        Dx = x_distribution.sample(self.hyperparameter_batch_shape + (dataset_size, 1))
-        x = x_distribution.sample(self.hyperparameter_batch_shape +  (1, 1))
+        Dx = self.x_distribution.sample(self.hyperparameter_batch_shape + (dataset_size,))
+        x = self.x_distribution.sample(self.hyperparameter_batch_shape +  (1,))
+
         y = self.get_target_y_distribution().sample()
         return Dx, x, y
 
@@ -273,7 +274,7 @@ def run(n_components: int,
     # Distribution transformer
     d_model = transformer_kwargs["d_model"]
     component_embedding = ComponentEmbedding(state_size=state_size, d_model=d_model, **component_embedding_kwargs)
-    observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size= (2 if key=="dataset" else 1), **kwargs)
+    observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size= (meta_prior_kwargs["x_dimensions"] + (1 if key=="dataset" else 0)), **kwargs)
                              for key, kwargs in observation_embedding_kwargs.items()}
     model = DistributionTransformer(component_embedding=component_embedding,
                                     transformer_kwargs=transformer_kwargs,
