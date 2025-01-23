@@ -4,6 +4,7 @@ Testing workflow
 
 import gpytorch
 from matplotlib import pyplot as plt
+from sympy import hyper
 import torch
 from torch import Tensor
 from torch.nn import Identity
@@ -699,7 +700,8 @@ def plot_gp(predicted_gp_posterior: Distribution,
             train_X: torch.Tensor,
             train_Y: torch.Tensor,
             linspace_points: int,
-            x_domain_size: float) -> plt.Figure:
+            x_domain_size: float,
+            hyperpior=False) -> plt.Figure:
     """
     Function to plot a (1 dimensional) distribution, or a pair of (1 dimensional) distributions.
 
@@ -717,8 +719,21 @@ def plot_gp(predicted_gp_posterior: Distribution,
     x = torch.linspace(0, x_domain_size, linspace_points)
 
     if isinstance(predicted_gp_posterior, GaussianMixtureModel):
-        mean_predicted = predicted_gp_posterior.loc.flatten()
-        std_predicted = predicted_gp_posterior.covariance_matrix.flatten() ** 0.5
+        if hyperpior:
+            mean_per_component = predicted_gp_posterior.loc[...,0]
+            weights_per_component = predicted_gp_posterior.weights
+            var_per_component = predicted_gp_posterior.covariance_matrix[...,0, 0]
+            
+            mean_mean = torch.sum(mean_per_component * weights_per_component, dim=-1)
+            mean_var = torch.sum(var_per_component * weights_per_component, dim=-1)
+            var_mean = torch.sum(weights_per_component * (mean_per_component - mean_mean.unsqueeze(-1))**2, dim=-1)
+            
+            mean_predicted = mean_mean
+            std_predicted = (mean_var + var_mean) ** 0.5
+        else:
+            mean_predicted = predicted_gp_posterior.loc.flatten()
+            std_predicted = predicted_gp_posterior.covariance_matrix.flatten() ** 0.5
+        
         upper_confidence_predicted = mean_predicted + 1.96 * std_predicted
         lower_confidence_predicted = mean_predicted - 1.96 * std_predicted
     else:
@@ -738,7 +753,8 @@ def plot_gp(predicted_gp_posterior: Distribution,
     ax.plot(x, mean_true.cpu(), color='orange', label="True")
     ax.fill_between(x, lower_confidence_true.cpu(), upper_confidence_true.cpu(), color='orange', alpha=0.2)
 
-    ax.scatter(train_X.cpu(), train_Y.cpu(), label="Training Data")
+    if train_X != None and train_Y != None:
+        ax.scatter(train_X.cpu(), train_Y.cpu(), label="Training Data")
 
     ax.set_title("X")
     ax.set_ylabel("Y")
@@ -756,6 +772,7 @@ def test_gp(model: DistributionTransformer,
          bounds_func: Optional[Callable[[dict[str, Tensor]], tuple[float, float]]] = None,
          gpu_device: str = "cuda:0",
          linspace_size:int = 1000,
+         hyperpior=False,
          _run=None
          ) -> None:
     """
@@ -899,7 +916,11 @@ def test_gp(model: DistributionTransformer,
 
         z["dataset"] = z["dataset"].unsqueeze(0).expand((linspace_size,) + z["dataset"].shape)
         phi = phi.unsqueeze(0).expand((linspace_size,) + phi.shape)
-
+        if hyperpior:
+            lengthscale = x[..., 1]
+        else:
+            lengthscale = prior.lengthscale
+        
         # Device
         model.cpu()
 
@@ -907,6 +928,7 @@ def test_gp(model: DistributionTransformer,
         prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
 
         # Model solution
+        print(phi, lengthscale)
         start_time = time()
         phi_in, phi_out = model(phi, **z)
         model_single_inference_time = time() - start_time
@@ -914,7 +936,7 @@ def test_gp(model: DistributionTransformer,
         model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
 
         kernel = ScaleKernel(RBFKernel())
-        kernel.base_kernel.lengthscale = prior.lengthscale
+        kernel.base_kernel.lengthscale = lengthscale
         kernel.outputscale = hyperparams['covariance_matrix']**0.5
 
         mean_function = ConstantMean()
@@ -967,11 +989,16 @@ def test_gp(model: DistributionTransformer,
                     samples = samples.sort().values
                     return samples[499].item(), samples[9499].item()
 
-            #prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
+            true_prior = torch.distributions.MultivariateNormal(
+                loc = phi[:,0],
+                covariance_matrix = torch.diag(phi[:,1]),
+            )
+            prior_plot = plot_gp(model_prior, true_prior, None, None, linspace_size,
+                                 x_domain_size, hyperpior=hyperpior)
             #                                bounds_func(phi_prior_dict), n_kl_samples=n_kl_samples)
 
             model_posterior_plot = plot_gp(model_posterior, true_posterior, train_x, train_y, linspace_size,
-                                           x_domain_size)
+                                           x_domain_size, hyperpior=hyperpior)
 
 
             if "vi" in competitor_kwargs:
@@ -993,10 +1020,10 @@ def test_gp(model: DistributionTransformer,
                 pfn_single_inference_time = time() - start_time
                 pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
                 pfn_posterior_plot = plot_gp(pfn_posterior, true_posterior, train_x, train_y, linspace_size,
-                                           x_domain_size)
+                                           x_domain_size, hyperpior=hyperpior)
 
             if _run is not None:
-                #prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
+                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.png")
 
                 model_posterior_plot.savefig(_run.observers[0].dir + "\\model_posterior_plot.png")
                 if "vi" in competitor_kwargs:
