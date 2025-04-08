@@ -218,7 +218,10 @@ def train(model: DistributionTransformer,
         _run.info["epoch_posterior_loss_series"] = posterior_loss_series
 
     if _run is not None:
-        _run.info["training_time"] = time.time() - before_training
+        try:
+            _run.info["model_training_time"].append(time.time() - before_training)
+        except KeyError:
+            _run.info["model_training_time"] = [time.time() - before_training]
 
     model.eval()
     return model.cpu(), epoch_metrics
@@ -390,7 +393,10 @@ def train_pfn(model: PFN,
         _run.info["pfn_epoch_posterior_loss_series"] = posterior_loss_series
 
     if _run is not None:
-        _run.info["pfn_training_time"] = time.time() - before_training
+        try:
+            _run.info["pfn_training_time"].append(time.time() - before_training)
+        except KeyError:
+            _run.info["pfn_training_time"] = [time.time() - before_training]
 
     model.eval()
     return model.cpu(), epoch_metrics

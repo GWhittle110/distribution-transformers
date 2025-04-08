@@ -4,13 +4,15 @@ Extended Kalman filter competitor for filtering tasks
 
 import torch
 from torch import Tensor
-from torch.distributions import Distribution, constraints
+from torch.distributions import Distribution
 from torch.func import vmap, jacrev
 
 from functools import partial
+from time import time
 
 from distributions.distributions import (ObservationModel, DirectGaussianObservationModel,
-                                         MappedGaussianObservationModel, LinearGaussianObservationModel)
+                                         MappedGaussianObservationModel, LinearGaussianObservationModel,
+                                         RangefinderObservationModel, GaussianAngleObservationModel)
 from distributions.utils import batch_diag
 from dynamic.motion_models import MotionModel, LTIMotionModel
 from dynamic.filters import Filter
@@ -37,7 +39,7 @@ class EKF(Filter):
 
     def filter(self, observation_series: dict[str, Tensor],
                x0_distribution: Distribution
-               ) -> dict[str, Tensor]:
+               ) -> tuple[dict[str, Tensor], float]:
         """
         Filter the provided series (assuming sequence in first dimension) assuming initial uncertainty
         x0_distribution.
@@ -65,13 +67,17 @@ class EKF(Filter):
         filtered_loc = torch.empty(*batched_series_shape, self.state_size)
         filtered_covariance_matrix = torch.empty(*batched_series_shape, self.state_size, self.state_size)
 
+        inference_times = []
         for i, observations in enumerate(zip(*observation_series.values())):
+            start_time = time()
             posterior_params = self._update(prior_params, **dict(zip(observation_series, observations)))
             filtered_loc[i] = posterior_params["loc"]
             filtered_covariance_matrix[i] = posterior_params["covariance_matrix"]
             prior_params = self._predict(posterior_params, i)
+            inference_times.append(time() - start_time)
 
-        return {"loc": filtered_loc, "covariance_matrix": filtered_covariance_matrix}
+        return ({"loc": filtered_loc, "covariance_matrix": filtered_covariance_matrix},
+                sum(inference_times) / len(inference_times))
 
     def _predict(self, prev_posterior_params: dict[str, Tensor],
                  k: int,
@@ -142,10 +148,24 @@ class EKF(Filter):
             elif isinstance(observation_model, DirectGaussianObservationModel):
                 H = torch.eye(self.state_size, device=device)
                 R = observation_model.covariance_matrix
+            elif isinstance(observation_model, RangefinderObservationModel):
+                range = torch.sqrt(x[..., 0] ** 2 + x[..., 2] ** 2)
+                H = (observation_model.weights[..., 0] * x / range.unsqueeze(-1)).unsqueeze(-2)
+                H[..., [1, 3]] = 0
+                R = batch_diag(observation_model.conditional_variance(x))
+            elif isinstance(observation_model, GaussianAngleObservationModel):
+                range2 = x[..., 0] ** 2 + x[..., 2] ** 2
+                H = torch.zeros_like(x)
+                H[..., 0] = x[..., 2] / range2
+                H[..., 2] = -x[..., 0] / range2
+                H = H.unsqueeze(-2)
+                R = batch_diag(observation_model.conditional_variance(x))
             else:
+                torch.set_grad_enabled(True)
                 H = torch.stack([jacrev(observation_model.conditional_mean)(x_batch) for x_batch in x])
                 R = getattr(observation_model, "covariance_matrix",
                             batch_diag(observation_model.conditional_variance(x)))
+                torch.set_grad_enabled(False)
             S = H @ P @ H.mT + R
             K = P @ H.mT @ torch.linalg.inv(S)
 

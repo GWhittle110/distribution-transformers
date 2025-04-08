@@ -71,4 +71,4 @@ def run(n_components: int,
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    test(model, complete_distribution, _run=_run, **testing_kwargs)
+    test(model, n_components, complete_distribution, _run=_run, **testing_kwargs)

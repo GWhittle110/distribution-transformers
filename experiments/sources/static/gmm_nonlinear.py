@@ -77,7 +77,7 @@ def run(n_components: int,
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    test(model, complete_distribution,
+    test(model, n_components, complete_distribution,
          bounds_func=partial(gmm_bounds_func,
                              scale_parametrisation=component_embedding_kwargs["scale_parametrisation"]),
          _run=_run, **testing_kwargs)

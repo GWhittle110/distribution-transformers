@@ -27,6 +27,7 @@ def run(n_components: int,
         transformer_kwargs: dict,
         training_kwargs: dict,
         testing_kwargs: dict,
+        load_path: str | None = None,
         _run=None,
         *args, **kwargs):
     """
@@ -44,20 +45,22 @@ def run(n_components: int,
         transformer_kwargs: Dictionary of parameters for the transformer model.
         training_kwargs: Dictionary of parameters for the training routine.
         testing_kwargs: Dictionary of parameters for the testing routine.
+        load_path: Path from which to load model parameters
         _run: Sacred run object.
 
     Returns:
 
     """
-
     # Meta-prior
     meta_prior = GaussianMixtureModelConjugateMetaPrior(state_size=state_size, n_components=n_components,
                                                         **meta_prior_kwargs)
 
     # Observation model
-    covariance_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
+    covariance_matrix_dict = {key: torch.tensor(val, dtype=torch.float32) * torch.eye(
+        observation_embedding_kwargs[key]["observation_size"])
                               for key, val in observation_covariance_matrix.items()}
-    observation_matrix_dict = {key: torch.tensor(val, dtype=torch.float32)
+    observation_matrix_dict = {key: torch.tensor(val, dtype=torch.float32).broadcast_to(
+        observation_embedding_kwargs[key]["observation_size"], state_size)
                                for key, val in observation_matrix.items()}
     observation_model = {key: LinearGaussianObservationModel(observation_matrix=observation_matrix_dict[key],
                                                              covariance_matrix=covariance_matrix_dict[key])
@@ -69,7 +72,7 @@ def run(n_components: int,
     # Distribution transformer
     d_model = transformer_kwargs["d_model"]
     component_embedding = ComponentEmbedding(state_size=state_size, d_model=d_model, **component_embedding_kwargs)
-    observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
+    observation_embedding = {key: ObservationEmbedding(d_model=d_model, **kwargs)
                              for key, kwargs in observation_embedding_kwargs.items()}
     model = DistributionTransformer(component_embedding=component_embedding,
                                     transformer_kwargs=transformer_kwargs,
@@ -78,7 +81,10 @@ def run(n_components: int,
                                     sample_space_transform=None,
                                     **observation_embedding)
 
-    model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
+    if load_path is not None:
+        model.load_state_dict(torch.load('experiments\\runs\\gmm_closed_form\\' + load_path, weights_only=True))
+    else:
+        model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
 
     scale_parametrisation = component_embedding_kwargs["scale_parametrisation"]
 
@@ -95,6 +101,6 @@ def run(n_components: int,
             scale_parametrisation: getattr(dist, scale_parametrisation)
         }
 
-    test_conjugate_prior(model, complete_distribution, conjugacy_update,
+    test_conjugate_prior(model, n_components, complete_distribution, conjugacy_update,
                          bounds_func=partial(gmm_bounds_func, scale_parametrisation=scale_parametrisation),
                          _run=_run, **testing_kwargs)

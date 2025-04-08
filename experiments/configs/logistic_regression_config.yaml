@@ -2,20 +2,20 @@ name: logistic_regression
 module_path: "static.logistic_regression"
 seed: 0
 
-n_components: 1
+n_components: 4
 
 meta_prior_kwargs:
   scale_eps: 0.00001
   scale_parametrisation: scale_tril
-  default_scale_multiple: 1.
+  default_scale_multiple: .1
 
 observation_model_kwargs:
   obs_1:
     n_features: 24
-    n_datapoints: 1000
+    n_datapoints: 100
 
 component_embedding_kwargs:
-  hidden_layer_sizes: [32]
+  hidden_layer_sizes: [512]
   activation: gelu
   jitter: 0.00001
   eps: 0.000001
@@ -23,23 +23,23 @@ component_embedding_kwargs:
 
 observation_embedding_kwargs:
   obs_1:
-    hidden_layer_sizes: [32]
+    hidden_layer_sizes: [128, 512]
     activation: gelu
 
 transformer_kwargs:
-  d_model: 32
+  d_model: 1024
   n_head: 8
-  dim_feedforward: 2048
+  dim_feedforward: 4096
   dropout: 0
   num_layers: 6
   activation: gelu
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 10
+  epochs: 200
   steps_per_epoch: 100
   batch_size: 100
-  lr: 0.001
+  lr: 0.0005
   weight_decay: 0
   verbose: True
   progress_bar: True
@@ -52,11 +52,12 @@ testing_kwargs:
   plot: False
   competitor_kwargs:
     vi:
-      lr: 0.02
+      lr: 0.01
       lr_decay: 0.999
-      n_iters: 10000
-      n_samples: 10
-      ewma_gamma: 0.01
+      n_iters: 100
+      repeats: 100
+      n_samples: 1000
+      ewma_gamma: 0.99
       progress_bar: True
-      initial_loc_std: .01
-      initial_scale_tril_std: 0.01
+      initial_loc_std: .1
+      initial_scale_tril_std: 0.

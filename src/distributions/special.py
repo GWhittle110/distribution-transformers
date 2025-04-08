@@ -4,7 +4,7 @@ Special methods and classes operating on distributions
 
 import torch
 from torch import Tensor
-from torch.distributions import Distribution, Wishart, MultivariateNormal
+from torch.distributions import Distribution, Wishart, MultivariateNormal, constraints
 
 from typing import Optional, Callable
 from sklearn.mixture import GaussianMixture
@@ -85,7 +85,8 @@ def distribution_to_gmm(p: Distribution, n_components: int,
 def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
                                                     observation_model: LinearGaussianObservationModel,
                                                     observations: Tensor,
-                                                    device: str = "cuda:0"
+                                                    device: str = "cuda:0",
+                                                    jitter: float = 1e-6
                                                     ) -> GaussianMixtureModel:
     """
     Given a Gaussian mixture model prior, a linear Gaussian observation model, and a set of observations, return the
@@ -97,6 +98,9 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
         observations: Tensor of observations.
         device: CUDA device.
             Defaults to "cuda:0".
+        jitter: Small value to add to diagonal of poorly-conditioned covariance matrices. Raised to the power of
+            1 / sqrt of dimensionality to ensure raw determinant increases by this amount each jitter addition.
+            Defaults to 1e-6.
 
     Returns:
         Posterior Gaussian mixture model.
@@ -155,6 +159,15 @@ def gmm_with_linear_gaussian_observations_posterior(prior: GaussianMixtureModel,
     posterior_weights = prior.weights * observation_component_evidences
     posterior_weights /= posterior_weights.sum(dim=-1).unsqueeze(-1)
 
+    # Add jitter where necessary
+    cov_shape = posterior_covariance_matrix.shape
+    jitter = jitter ** (1 / cov_shape[-1])
+    posterior_covariance_matrix = posterior_covariance_matrix.flatten(0, -3)
+    while not (constraints.positive_definite.check(posterior_covariance_matrix)).all():
+        posterior_covariance_matrix[torch.logical_not(constraints.positive_definite.check(
+            posterior_covariance_matrix))] += jitter * torch.eye(cov_shape[-1], device=device)
+    posterior_covariance_matrix = posterior_covariance_matrix.reshape(cov_shape)
+
     posterior = GaussianMixtureModel(weights=posterior_weights, loc=posterior_loc,
-                                     covariance_matrix=posterior_covariance_matrix, validate_args=False)
+                                     covariance_matrix=posterior_covariance_matrix, validate_args=True)
     return posterior

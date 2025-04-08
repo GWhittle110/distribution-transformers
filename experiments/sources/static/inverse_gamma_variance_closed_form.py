@@ -4,15 +4,21 @@ Experiment to validate method against closed form posterior of inverse prior wit
 
 import torch
 from torch import Tensor
+from torch.func import vmap, jacrev
 
-from distributions.distributions import InverseGammaMetaPrior, MappedScaleGaussianObservationModel, CompleteDistribution
+from typing import Union
+import matplotlib.pyplot as plt
+
+from distributions.distributions import (InverseGammaMetaPrior, MappedScaleGaussianObservationModel,
+                                         GaussianMixtureModel, CompleteDistribution)
+from distributions.utils import decode_gmm_sample
 from model.distribution_transformer import DistributionTransformer
 from workflows.train import train
 from workflows.test import test_conjugate_prior
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 
 
-def run(n_components: int,
+def run(n_components: Union[int, list[int]],
         meta_prior_kwargs: dict,
         observation_loc: dict[str, list[float]],
         distribution_embedding_kwargs: dict,
@@ -40,6 +46,8 @@ def run(n_components: int,
         _run: Sacred run object.
 
     """
+    if not isinstance(n_components, list):
+        n_components = [n_components]
 
     meta_prior = InverseGammaMetaPrior(**meta_prior_kwargs)
 
@@ -51,18 +59,22 @@ def run(n_components: int,
     complete_distribution = CompleteDistribution(meta_prior, **observation_model)
 
     d_model = transformer_kwargs["d_model"]
-    prior_embedding = GammaEmbedding(d_model=d_model, n_components=n_components, **distribution_embedding_kwargs)
-    component_embedding = ComponentEmbedding(state_size=1, d_model=d_model, **component_embedding_kwargs)
-    observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
-                             for key, kwargs in observation_embedding_kwargs.items()}
-    model = DistributionTransformer(component_embedding=component_embedding,
-                                    transformer_kwargs=transformer_kwargs,
-                                    n_components=n_components,
-                                    prior_embedding=prior_embedding,
-                                    sample_space_transform=torch.log,
-                                    **observation_embedding)
 
-    model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
+    models = []
+    for n in n_components:
+        prior_embedding = GammaEmbedding(d_model=d_model, n_components=n, **distribution_embedding_kwargs)
+        component_embedding = ComponentEmbedding(state_size=1, d_model=d_model, **component_embedding_kwargs)
+        observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
+                                 for key, kwargs in observation_embedding_kwargs.items()}
+        model = DistributionTransformer(component_embedding=component_embedding,
+                                        transformer_kwargs=transformer_kwargs,
+                                        n_components=n,
+                                        prior_embedding=prior_embedding,
+                                        sample_space_transform=torch.log,
+                                        **observation_embedding)
+
+        model, _ = train(model, complete_distribution, _run=_run, **training_kwargs)
+        models.append(model)
 
     def conjugacy_update(phi: dict[str, Tensor],
                          z: dict[str, Tensor],
@@ -79,5 +91,5 @@ def run(n_components: int,
         rate = params["rate"].item()
         return 1e-6, 4 * rate / concentration + 1 / rate
 
-    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
+    test_conjugate_prior(models, n_components, complete_distribution, conjugacy_update, bounds_func=bounds_func,
                          inverse_transform=torch.exp, _run=_run, **testing_kwargs)

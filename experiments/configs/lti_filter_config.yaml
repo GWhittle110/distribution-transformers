@@ -1,6 +1,7 @@
 name: lti_filter
 module_path: "dynamic.lti_filter"
-seed: 0
+seed: 1
+load_path: "98/state_dicts/model_state_dict.pt"
 
 n_components: 4
 state_size: 4
@@ -8,13 +9,13 @@ state_size: 4
 meta_prior_kwargs:
   scale_eps: 0.0001
   scale_parametrisation: scale_tril
-  default_scale_multiple: 16
+  default_scale_multiple: 4
 
 observation_model_kwargs:
   obs_1:
     scale: .1
     rate: 1.
-    max_range: 10.
+    max_range: 20.
     weights: [ .7, .2, .1 ]
   obs_2:
     scale: .1
@@ -50,7 +51,7 @@ motion_model_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 5
+  epochs: 130
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.001
@@ -66,4 +67,6 @@ testing_kwargs:
   plotting_kwargs:
     dim: 0
   competitor_kwargs:
-    ekf
+    ekf: null
+    particle_filter:
+      n_particles: 5000

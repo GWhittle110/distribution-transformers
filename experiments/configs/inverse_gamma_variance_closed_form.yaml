@@ -2,13 +2,13 @@ name: gmm_closed_form
 module_path: "static.inverse_gamma_variance_closed_form"
 seed: 0
 
-n_components: 5
+n_components: [2, 2, 5, 5]
 
 meta_prior_kwargs:
-  concentration_concentration: 10
-  concentration_rate: 10
-  rate_concentration: 10
-  rate_rate: 10
+  concentration_concentration: 10000
+  concentration_rate: 20000
+  rate_concentration: 10000
+  rate_rate: 20000
 
 observation_loc:
   obs_1: [0]
@@ -41,7 +41,7 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 10
+  epochs: 1
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.005
@@ -59,7 +59,8 @@ testing_kwargs:
     vi:
       lr: 0.1
       lr_decay: 0.999
-      n_iters: 2000
+      n_iters: 100
+      repeats: 100
       n_samples: 10
       ewma_gamma: 0.01
       progress_bar: True
@@ -73,17 +74,17 @@ testing_kwargs:
         dropout: 0
         num_layers: 6
         activation: gelu
-      n_buckets: 15
+      n_buckets: [15, 15, 5000, 5000]
       infinite_support: [False, True]
       leftmost_border: 0.
       hidden_layer_sizes: [ 32 ]
       activation: gelu
       training_kwargs:
         warmup_epochs: 5
-        epochs: 10
+        epochs: 1
         steps_per_epoch: 100
         batch_size: 5000
-        lr: 0.0001
+        lr: 0.001
         weight_decay: 0
         max_grad: 10.
         verbose: True

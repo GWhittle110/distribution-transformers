@@ -146,5 +146,5 @@ def run(n_components: int,
     def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
         return 1e-6, 1.-1e-6
 
-    test(model, complete_distribution, inverse_transform=torch.sigmoid, bounds_func=bounds_func,
+    test(model, n_components, complete_distribution, inverse_transform=torch.sigmoid, bounds_func=bounds_func,
          _run=_run, **testing_kwargs)

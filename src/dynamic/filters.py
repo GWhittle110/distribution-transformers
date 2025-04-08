@@ -7,6 +7,7 @@ from torch import Tensor
 from torch.distributions import Distribution, MultivariateNormal
 
 from abc import ABC
+from time import time
 
 from model.distribution_transformer import DistributionTransformer
 from dynamic.motion_models import LTIMotionModel
@@ -55,7 +56,7 @@ class LTIFilter(Filter):
 
     def filter(self, observation_series: dict[str, Tensor],
                x0_distribution: MultivariateNormal
-               ) -> dict[str, Tensor]:
+               ) -> tuple[dict[str, Tensor], float]:
         """
         Filter the provided series (assuming sequence in first dimension) assuming initial uncertainty
         x0_distribution.
@@ -66,6 +67,7 @@ class LTIFilter(Filter):
 
         Returns:
             Tensor of GMM parameters of shape (series_length | batch_shape | n_components | w mu sigma).
+            Inference time
 
         """
         device = list(observation_series.values())[0].device
@@ -91,8 +93,10 @@ class LTIFilter(Filter):
                                     ).broadcast_to(*batch_shape, n_components, n_params).to(device)
 
         filtered_params = torch.empty(*batched_series_shape, n_components, n_params)
+        inference_times = []
 
         for i, observations in enumerate(zip(*observation_series.values())):
+            start_time = time()
             _, posterior_params = self.model(prior_params, **dict(zip(observation_series, observations)))
             filtered_params[i] = posterior_params
             prior_params_dict = decode_gmm_sample(posterior_params, scale_parametrisation)
@@ -124,5 +128,6 @@ class LTIFilter(Filter):
                     raise ValueError
 
             prior_params = encode_gmm_sample(prior_params_dict, scale_parametrisation)
+            inference_times.append(time()-start_time)
 
-        return decode_gmm_sample(filtered_params)
+        return decode_gmm_sample(filtered_params), sum(inference_times) / len(inference_times)
