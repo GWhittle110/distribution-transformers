@@ -41,8 +41,7 @@ from distributions.distributions import (InverseGammaMetaPrior, ObservationModel
 from model.embeddings import DistributionEmbedding
 from model.distribution_transformer import DistributionTransformer
 from distributions.utils import gmm_bounds_func
-from workflows.train import train
-from workflows.test import test_gp
+
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 from experiments.sources.static.gp_predictive_hyperprior import NOISE_VAR, CompleteDistributionGPPredictive, ExactGPModel, GPPredictiveObservationModel, HyperpriorEmbedding, MeanScaleMetaPrior
 from scipy.stats import gaussian_kde

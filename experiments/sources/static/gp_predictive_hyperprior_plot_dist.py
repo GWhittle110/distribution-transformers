@@ -30,8 +30,6 @@ from distributions.utils import plot_distributions
 from model.embeddings import DistributionEmbedding
 from model.distribution_transformer import DistributionTransformer
 from distributions.utils import gmm_bounds_func
-from workflows.train import train
-from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 from experiments.sources.static.gp_predictive_hyperprior import CompleteDistributionGPPredictive, ExactGPModel, GPPredictiveObservationModel, HyperpriorEmbedding, MeanScaleMetaPrior
 
