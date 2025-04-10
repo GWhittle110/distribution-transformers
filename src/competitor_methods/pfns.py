@@ -104,11 +104,11 @@ class RiemannDistribution(Distribution):
         lower_confidence = (lower_upper_boundary - (lower_upper_boundary - lower_lower_boundary) *
                             (lower_upper_boundary_cdf - lower[..., 0].reshape(lower_lower_boundary.shape)) /
                             (lower_upper_boundary_cdf - lower_lower_boundary_cdf)
-                            * (1 + (lower_idx == 0) * self.left_infinite_support))
+                            * (1 + (lower_idx.unsqueeze(-1) == 0) * self.left_infinite_support))
         upper_confidence = (upper_lower_boundary + (upper_upper_boundary - upper_lower_boundary) *
                             (upper[..., 0].reshape(upper_lower_boundary.shape) - upper_lower_boundary_cdf) /
                             (upper_upper_boundary_cdf - upper_lower_boundary_cdf)
-                            * (1 + (upper_idx == cdf.shape[-1] - 1) * self.right_infinite_support))
+                            * (1 + (upper_idx.unsqueeze(-1) == cdf.shape[-1] - 1) * self.right_infinite_support))
         return torch.stack([lower_confidence.squeeze(-1), upper_confidence.squeeze(-1)], dim=-1)
 
     def sample(self, sample_shape: _size = torch.Size()) -> Tensor:
@@ -134,6 +134,17 @@ class RiemannDistribution(Distribution):
         return (uniform_sample
                 + left_normal_sample * ((buckets == 0) * self.left_infinite_support)
                 + right_normal_sample * (buckets == max_bucket) * self.right_infinite_support)
+
+    @property
+    def mean(self) -> Tensor:
+        mean = torch.sum((self.borders[..., :-1] + self.borders.diff(dim=-1) / 2)
+                         * self.probs[..., self.left_infinite_support:-1 if self.right_infinite_support else None],
+                         dim=-1)
+        if self.left_infinite_support:
+            mean += self.probs[..., 0] * (self.borders[..., 0] - 0.8 * self.left_variance.sqrt())
+        if self.right_infinite_support:
+            mean += self.probs[..., -1] * (self.borders[..., -1] + 0.8 * self.right_variance.sqrt())
+        return mean
 
     @lazy_property
     def weights(self):

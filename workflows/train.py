@@ -1,6 +1,8 @@
 """
 Main training routine for distribution transformer models
 """
+from collections import defaultdict
+from email.policy import default
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LRScheduler
@@ -49,6 +51,7 @@ def train(model: DistributionTransformer,
           progress_bar: bool = True,
           save_interval: Optional[int] = -1,
           save_loss_series: bool = True,
+          print_marginals: bool = True,
           _run=None
           ) -> tuple[DistributionTransformer, dict]:
     """
@@ -123,6 +126,7 @@ def train(model: DistributionTransformer,
         total_step_time = 0.
         epoch_prior_loss_series = []
         epoch_posterior_loss_series = []
+        marginal_losses = defaultdict(list)
         tqdm_iter = tqdm(range(steps_per_epoch), desc='Training Epoch') if progress_bar else None
 
         before_get_batch = time.time()
@@ -146,7 +150,21 @@ def train(model: DistributionTransformer,
             posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation)
                                                      ).log_prob(model.sample_space_transform(targets))
             posterior_loss = torch.nanmean(posterior_losses)
-
+            
+            if print_marginals:
+                state_size = int((phi_out.shape[-1])**0.5)
+                weigth = phi_out[:,:,0]
+                loc = phi_out[..., 1:state_size+1]
+                scale = phi_out[..., -state_size ** 2:].reshape(*phi_out.shape[:-1], state_size, state_size)
+                var = torch.diagonal(scale, dim1=-2, dim2=-1)
+                
+                for var_ix in range(var.shape[-1]):
+                    marginal_phi_out = torch.stack([weigth, loc[:,:,var_ix], var[:,:,var_ix]], dim=-1)
+                    marginal_posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(marginal_phi_out, scale_parametrisation)
+                                                     ).log_prob(model.sample_space_transform(targets)[:, [var_ix]])
+                    marginal_posterior_loss = torch.nanmean(marginal_posterior_losses)
+                    marginal_losses[var_ix].append(marginal_posterior_loss)
+                
             total_loss = prior_loss + posterior_loss
             optimizer.zero_grad()
             total_loss.backward()
@@ -174,7 +192,8 @@ def train(model: DistributionTransformer,
             "mean_forward_time": total_forward_time / steps_per_epoch,
             "mean_step_time": total_step_time / steps_per_epoch,
             "epoch_prior_loss_series": epoch_prior_loss_series,
-            "epoch_posterior_loss_series": epoch_posterior_loss_series
+            "epoch_posterior_loss_series": epoch_posterior_loss_series,
+            "marginal_posterior_loss": marginal_losses
         }
 
     for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
@@ -186,7 +205,7 @@ def train(model: DistributionTransformer,
             print("Invalid epoch encountered, skipping...")
             raise e
 
-        if save_interval is not None and save_interval != -1 and save_interval % epoch == 0 and _run is not None:
+        if save_interval is not None and save_interval != -1 and epoch % save_interval   == 0 and _run is not None:
             path = _run.observers[0].dir+"\\state_dicts\\"
             makedirs(path, exist_ok=True)
             torch.save(model.state_dict(), path + f"model_state_dict_{epoch}.pt")
@@ -204,6 +223,11 @@ def train(model: DistributionTransformer,
                 f'| step time {epoch_metrics["mean_step_time"]:5.2f} '
                 f'| mean prior loss {epoch_metrics["mean_prior_loss"]:5.2f} '
                 f'| mean posterior loss {epoch_metrics["mean_posterior_loss"]:5.2f} |')
+        
+            if print_marginals:
+                for var_ix, marginal_loss in epoch_metrics["marginal_posterior_loss"].items():
+                    print(f'| marginal mean posterior loss var {var_ix} {torch.mean(torch.stack(marginal_loss)).item():5.2f} |')
+                    
             print('-' * 179)
 
         scheduler.step()
@@ -328,6 +352,7 @@ def train_pfn(model: PFN,
                         model.leftmost_border, model.rightmost_border).mean(dim=0)
                     model.borders = borders.to(device)
             before_forward = time.time()
+
             phi_out = model(**observations)
             forward_time = time.time() - before_forward
             targets = x.reshape(batch_size).to(device)
@@ -364,7 +389,7 @@ def train_pfn(model: PFN,
         epoch_start_time = time.time()
         epoch_metrics = train_epoch(epoch == 1)
 
-        if save_interval is not None and save_interval != -1 and save_interval % epoch == 0 and _run is not None:
+        if save_interval is not None and save_interval != -1 and epoch % save_interval == 0 and _run is not None:
             path = _run.observers[0].dir+"\\state_dicts\\pfns\\"
             makedirs(path, exist_ok=True)
             torch.save(model.state_dict(), path + f"pfn_state_dict_{epoch}.pt")

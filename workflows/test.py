@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 from torch.nn import Identity
 from torch.func import vmap, jacrev
-from torch.distributions import MultivariateNormal
+from torch.distributions import MultivariateNormal, Distribution
 
 from time import time
 from math import sqrt
@@ -26,6 +26,9 @@ from workflows.utils import get_model_size
 from dynamic.motion_models import LTIMotionModel
 from dynamic.filters import LTIFilter
 from dynamic.utils import plot_filtered_series
+
+from gpytorch.kernels import RBFKernel, ScaleKernel
+from gpytorch.means import ConstantMean
 
 
 def test_conjugate_prior(model_list: Union[DistributionTransformer, list[DistributionTransformer]],
