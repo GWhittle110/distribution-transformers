@@ -1,8 +1,8 @@
 name: gp_predictive
 module_path: "static.gp_predictive_hyperprior_plot"
-seed: 20
-model_path: "/home/juliuszz/distribution-transformers/experiments/runs/gp_predictive_hyperprior/56\\state_dicts\\model_state_dict.pt"
-pfn_path: "/home/juliuszz/distribution-transformers/experiments/runs/gp_predictive_hyperprior_pfn/22\\state_dicts\\pfns\\pfn_state_dict.pt"
+seed: 3
+model_path: "/home/juliuszz/distribution-transformers/experiments/runs/gp_predictive_hyperprior/88\\state_dicts\\model_state_dict.pt"
+pfn_path: "/home/juliuszz/distribution-transformers/experiments/runs/gp_predictive_hyperprior_pfn/27\\state_dicts\\pfns\\pfn_state_dict.pt"
 
 n_components: 10
 state_size: 2
@@ -11,10 +11,10 @@ meta_prior_kwargs:
   dataset_size_low: 5
   dataset_size_high: 6
   x_domain_size: 10
-  lengthscale_prior_concentration_low: 1
-  lengthscale_prior_concentration_high: 1.0001
-  lengthscale_prior_rate_low: 2.0
-  lengthscale_prior_rate_high: 2.0001
+  lengthscale_prior_concentration_low: 100
+  lengthscale_prior_concentration_high: 105
+  lengthscale_prior_rate_low: 100.0
+  lengthscale_prior_rate_high: 200.0
   output_scale_low: 1.0
   output_scale_high: 1.00001
   constant_mean_low: 0.0

@@ -10,16 +10,17 @@ state_size: 2
 meta_prior_kwargs:
   dataset_size_low: 5
   dataset_size_high: 6
-  x_domain_size: 10
-  lengthscale_prior_concentration_low: 1
-  lengthscale_prior_concentration_high: 2
-  lengthscale_prior_rate_low: 1
-  lengthscale_prior_rate_high: 2
+  x_domain_size: 5
+  lengthscale_prior_concentration_low: 100
+  lengthscale_prior_concentration_high: 105
+  lengthscale_prior_rate_low: 100.0
+  lengthscale_prior_rate_high: 700.0
   output_scale_low: 1.0
   output_scale_high: 1.00001
   constant_mean_low: 0.0
   constant_mean_high: 0.00001
-  x_dimensions: 1
+  x_dimensions: 5
+
 
   
 
@@ -61,8 +62,8 @@ training_kwargs:
   warmup_epochs: 5
   epochs: 300
   steps_per_epoch: 100
-  batch_size: 1000
-  lr:  0.0001
+  batch_size: 5000
+  lr:  0.00001
   weight_decay: 0
   verbose: True
   progress_bar: True
@@ -91,7 +92,7 @@ testing_kwargs:
         warmup_epochs: 5
         epochs: 100
         steps_per_epoch: 100
-        batch_size: 500
+        batch_size: 5000
         lr:  0.0003
         weight_decay: 0
         verbose: True

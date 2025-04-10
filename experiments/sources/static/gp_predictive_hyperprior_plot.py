@@ -20,7 +20,7 @@ from competitor_methods.pfns import RiemannDistribution, PFN, get_borders_from_p
 from distributions.utils import decode_gmm_sample
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC
-
+import pyro.distributions as dist
 from gpytorch import add_jitter
 from gpytorch.kernels import RBFKernel, ScaleKernel
 from gpytorch.means import ConstantMean
@@ -38,9 +38,9 @@ from distributions.utils import gmm_bounds_func
 from workflows.train import train
 from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
-from experiments.sources.static.gp_predictive_hyperprior import CompleteDistributionGPPredictive, ExactGPModel, GPPredictiveObservationModel, HyperpriorEmbedding, MeanScaleMetaPrior
+from experiments.sources.static.gp_predictive_hyperprior import NOISE_VAR, CompleteDistributionGPPredictive, ExactGPModel, GPPredictiveObservationModel, HyperpriorEmbedding, MeanScaleMetaPrior
 
-MCMC_SAMPLES = 1000
+MCMC_SAMPLES = 2000
 
 class InverseGammaPrior(Prior, InverseGamma):
 
@@ -56,6 +56,26 @@ class InverseGammaPrior(Prior, InverseGamma):
 
     def __call__(self, *args, **kwargs):
         return super(InverseGamma, self).__call__(*args, **kwargs)
+    
+def get_marginal_posterior(
+    phi_out,
+    scale_parametrisation,
+    marginalise_y=False,
+    marginalise_lengthscale=False,
+):
+    
+    assert marginalise_y or marginalise_lengthscale
+    assert not(marginalise_y and marginalise_lengthscale)
+    
+    var_ix = 0 if marginalise_lengthscale else 1
+    
+    weigth = phi_out[...,0]
+    loc = phi_out[..., 1: 3]
+    scale = phi_out[..., -2 ** 2:].reshape(*phi_out.shape[:-1], 2, 2)
+    var = torch.diagonal(scale, dim1=-2, dim2=-1)
+    marginal_phi_out = torch.stack([weigth, loc[:,:,var_ix], var[:,:,var_ix]], dim=-1)
+
+    return GaussianMixtureModel(**decode_gmm_sample(marginal_phi_out, scale_parametrisation))
 
 def plot_gp(predicted_gp_posteriors: dict[str, Distribution],
             color_pallette: dict[str, str],
@@ -100,8 +120,12 @@ def plot_gp(predicted_gp_posteriors: dict[str, Distribution],
             lower_confidence_predicted = mean_predicted + 1.96 * std_predicted
             upper_confidence_predicted = mean_predicted - 1.96 * std_predicted
         elif isinstance(predicted_gp_posterior, MultivariateNormal):
-            mean_predicted = predicted_gp_posterior.mean
-            std_predicted = predicted_gp_posterior.variance ** 0.5
+            if predicted_gp_posterior.mean.dim() == 2:
+                mean_predicted = predicted_gp_posterior.mean.mean(dim=0)
+                std_predicted = (predicted_gp_posterior.variance.mean(dim=0) + predicted_gp_posterior.mean.var(dim=0)) ** 0.5
+            else:
+                mean_predicted = predicted_gp_posterior.mean
+                std_predicted = predicted_gp_posterior.variance ** 0.5
             
             lower_confidence_predicted = mean_predicted + 1.96 * std_predicted
             upper_confidence_predicted = mean_predicted - 1.96 * std_predicted
@@ -113,7 +137,7 @@ def plot_gp(predicted_gp_posteriors: dict[str, Distribution],
             upper_confidence_predicted = confidence_predicted[..., 1].flatten()
             
         ax.plot(x, mean_predicted.cpu().detach(), color=color_pallette[model_name], label=model_name)
-        ax.fill_between(x, lower_confidence_predicted.cpu().detach(), upper_confidence_predicted.cpu().detach(), color=color_pallette[model_name], alpha=0.2)
+        ax.fill_between(x, lower_confidence_predicted.cpu().detach(), upper_confidence_predicted.cpu().detach(), color=color_pallette[model_name], alpha=0.4)
 
     for ix, gp_posterior_draw in enumerate(gp_posterior_draws):
         ax.plot(x, gp_posterior_draw.cpu().detach(), color='orange', label="NUTS draws" if ix ==0 else None)
@@ -126,6 +150,17 @@ def plot_gp(predicted_gp_posteriors: dict[str, Distribution],
     ax.legend(loc="best")
     plt.show()
     return fig
+
+class BatchGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood, mean_module, covar_module):
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = mean_module
+        self.covar_module = covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
 def fit_NUTS(train_x, train_y, model, likelihood):
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
@@ -141,7 +176,7 @@ def fit_NUTS(train_x, train_y, model, likelihood):
     mcmc_run = MCMC(nuts_kernel, num_samples=MCMC_SAMPLES, warmup_steps=100, disable_progbar=False)
     mcmc_run.run(train_x, train_y)
     
-    model.pyro_load_from_samples(mcmc_run.get_samples())
+    return mcmc_run.get_samples()
 
 
 def run(n_components: int,
@@ -160,7 +195,7 @@ def run(n_components: int,
     device = "cuda:0" if torch.cuda.is_available() else 'cpu:0'
     
     meta_prior = MeanScaleMetaPrior(**meta_prior_kwargs)
-
+    
     observation_model = {observation_type: GPPredictiveObservationModel(observation_type=observation_type)
                         for observation_type in ["dataset", "query"]}
 
@@ -222,6 +257,7 @@ def run(n_components: int,
     
     
     if MCMC_SAMPLES > 0:
+
         kernel = ScaleKernel(RBFKernel())
         kernel.base_kernel.lengthscale = lengthscale
         kernel.outputscale = hyperparams['covariance_matrix']**0.5
@@ -230,24 +266,27 @@ def run(n_components: int,
         mean_function.constant = hyperparams['loc']
         
         likelihood = GaussianLikelihood()
-        likelihood.noise = 0.1
-        complete_distribution.observation_model["dataset"].likelihood
+        likelihood.noise = NOISE_VAR
         
         exact_gp = ExactGPModel(train_x, train_y, likelihood, mean_function, kernel)
 
         exact_gp.covar_module.base_kernel.register_prior(
             "lengthscale_prior", 
-            InverseGammaPrior(2, 2),
+            InverseGammaPrior(1, 2),
             "lengthscale"
         )
 
-        expanded_test_x = z["query"].unsqueeze(0).repeat(MCMC_SAMPLES, 1, 1)
-        fit_NUTS(train_x, train_y, exact_gp, likelihood)
-        exact_gp.eval()
-        mcmc_posteriors = exact_gp(expanded_test_x)
+        expanded_test_x = z["query"].unsqueeze(0)
+        samples = fit_NUTS(train_x, train_y, exact_gp, likelihood)
+        
+        sampled_kernel = ScaleKernel(RBFKernel(batch_shape=[1000]))
+        sampled_kernel.base_kernel.lengthscale = samples["covar_module.base_kernel.lengthscale_prior"][-1000:].reshape(1000, 1, 1)
+        sampled_kernel.outputscale = hyperparams['covariance_matrix']**0.5
+        
+        gpmodel = BatchGPModel(train_x, train_y, likelihood, mean_function, sampled_kernel)
+        gpmodel.eval()
+        mcmc_posteriors = gpmodel(expanded_test_x)
 
-        posterior_draws = mcmc_posteriors.sample()[-5:]
-   
     
     phi_in, phi_out = model(phi, **z)
     model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
@@ -257,11 +296,19 @@ def run(n_components: int,
     loc = phi_out[..., [0]]
     scale = phi_out[..., -2 ** 2:].reshape(*phi_out.shape[:-1], 2, 2)
     var = torch.diagonal(scale, dim1=-2, dim2=-1)
-    marginal_phi_out = torch.stack([weigth, loc[:,:,0], var[:,:,0]], dim=-1)
-
-    marginal_posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(marginal_phi_out, scale_parametrisation)
-                                        ).log_prob(true_posterior.loc.unsqueeze(-1))
-    marginal_posterior_losses = torch.nanmean(marginal_posterior_losses)
+    marginal_posterior= get_marginal_posterior(phi_out, scale_parametrisation, marginalise_y=True)
+    untransformed_ls_samples = marginal_posterior.sample([1])
+    transformed_ls_samples = torch.exp(untransformed_ls_samples)
+    
+    #sampled_kernel = ScaleKernel(RBFKernel(batch_shape=[1000]))
+    #sampled_kernel.base_kernel.lengthscale = transformed_ls_samples.reshape(1000, 1, 1)
+    #sampled_kernel.outputscale = hyperparams['covariance_matrix']**0.5
+    
+    #gpmodel = BatchGPModel(train_x, train_y, likelihood, mean_function, sampled_kernel)
+    #gpmodel.eval()
+    #dt_posterior = gpmodel(z["query"])
+    
+    dt_posterior = get_marginal_posterior(phi_out, scale_parametrisation, marginalise_lengthscale=True)
 
     meta_prior_pfn = MeanScaleMetaPrior(marginalise_lengthscale=True, **meta_prior_kwargs)
     complete_distribution_pfn = CompleteDistributionGPPredictive(meta_prior_pfn, marginalise_lengthscale=True, **observation_model)
@@ -275,9 +322,11 @@ def run(n_components: int,
     pfn = pfn.cpu()
     phi_out = pfn(**z)
     pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
-    
-    print("ours NLL:",marginal_posterior_losses.item())
+
+    print("DT NLL:",-torch.mean(dt_posterior.log_prob(true_posterior.loc.view(-1,1))).item())
     print("PFN NLL:",-torch.mean(pfn_posterior.log_prob(true_posterior.loc)).item())
+    #print("MCMC NLL:",-torch.mean(mcmc_posteriors.log_prob(true_posterior.loc.view(1,-1))).item())
+    print("Oracle NLL:",-torch.mean(true_posterior.log_prob(true_posterior.loc)).item())
     
     plot = plot_gp(
         {
@@ -286,7 +335,7 @@ def run(n_components: int,
         {
             "ours": "blue",
         },
-        posterior_draws if MCMC_SAMPLES > 0 else [],
+        [],
         train_x,
         train_y,
         linspace_points=linspace_size,
@@ -297,24 +346,28 @@ def run(n_components: int,
     
     plot = plot_gp(
         {
-            "DT": model_posterior,
+            "Oracle": true_posterior,
+            "DT": dt_posterior,
             "PFN": pfn_posterior,
-            "Oracle": true_posterior
+            "MCMC": mcmc_posteriors,
         },
         {
             "DT": "blue",
             "PFN": "green",
+            "MCMC": "violet",
             "Oracle": "orange"
         },
-        posterior_draws if MCMC_SAMPLES > 0 else [],
+        [],
         train_x,
         train_y,
         linspace_points=linspace_size,
         x_domain_size=x_domain_size,
         phi=phi
     )
-    plot.savefig(_run.observers[0].dir + "\\plot.png")
-    plot.savefig(_run.observers[0].dir + "\\plot.pdf")
+
+    print(f"LS:{round(lengthscale.item(), 4)}, Prior InverseGamma({round(phi[0, 2].item(),2)}, {round(phi[0, 3].item(),2)})")
+    plot.savefig(_run.observers[0].dir + "plot.png")
+    plot.savefig(_run.observers[0].dir + "plot.pdf")
 
 #test_gp(model, complete_distribution,
 #     bounds_func=partial(gmm_bounds_func,

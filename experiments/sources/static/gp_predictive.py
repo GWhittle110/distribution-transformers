@@ -180,7 +180,7 @@ class GPPredictiveObservationModel(ObservationModel):
         self.n_observations = Dx.shape[-1]
         
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        self.likelihood.noise = 0.001
+        self.likelihood.noise = 0.01
 
         self.gp_posterior = ExactGPModel(
             self.x, self.y, self.likelihood, gp_prior.mean_function, gp_prior.kernel

@@ -35,6 +35,9 @@ from workflows.train import train
 from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 
+
+NOISE_VAR = 0.001
+
 class InverseGammaPrior(Prior, InverseGamma):
 
     def __init__(self, concentration, rate, validate_args=False, transform=None):
@@ -60,6 +63,7 @@ class  ExactGPModel(gpytorch.models.ExactGP):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+    
     
 class GaussianEmbedding(DistributionEmbedding):
 
@@ -373,7 +377,7 @@ class GPPredictiveObservationModel(ObservationModel):
         self.n_observations = self.Dx.shape[-1]
         
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        self.likelihood.noise = 0.00011
+        self.likelihood.noise = NOISE_VAR
         
         if len(y_lengthscale.shape) - len(self.gp_prior.hyperparameter_batch_shape) > 1:
             sample_shape = y_lengthscale.shape[:1]
