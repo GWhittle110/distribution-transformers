@@ -21,6 +21,7 @@ from distributions.utils import decode_gmm_sample, encode_gmm_sample, kl_diverge
 from competitor_methods.variational_inference import VI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from competitor_methods.ekf import EKF
+from competitor_methods.tabpfn import test_tabpfn
 from workflows.train import train_pfn
 from workflows.utils import get_model_size
 from dynamic.motion_models import LTIMotionModel
@@ -29,6 +30,8 @@ from dynamic.utils import plot_filtered_series
 
 from gpytorch.kernels import RBFKernel, ScaleKernel
 from gpytorch.means import ConstantMean
+
+from tabpfn import TabPFNRegressor
 
 
 def test_conjugate_prior(model: DistributionTransformer,
@@ -112,8 +115,6 @@ def test_conjugate_prior(model: DistributionTransformer,
         model_posterior_expected_nll = model_posterior_nll.mean().item()
         model_posterior_std_nll = model_posterior_nll.std().item()
 
-
-
         model_size = get_model_size(model)
 
         print(f"GMM approximation prior mean KL divergence: {model_expected_prior_kl_divergence}\n"
@@ -180,9 +181,29 @@ def test_conjugate_prior(model: DistributionTransformer,
                                               inverse_transform=Identity())
                 pfn_expected_elbo = pfn_elbo.mean().item()
                 pfn_std_elbo = pfn_elbo.std().item()
+        
+        if "tabpfn" in competitor_kwargs:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "pfns only supported for univariate output distributions"
+            
+            tabpfn_kwargs = copy(competitor_kwargs["tabpfn"])
 
-        # Single problem run
+            start_time = time()
+            
+            _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
+                {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
+                x.to("cpu"), 
+                {key: val.to("cpu") for key, val in z.items()},
+                complete_distribution,
+                tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+            )
+            
+            tabpfn_inference_time = time() - start_time
+            tabpfn_size = get_model_size(tabpfn_regressor.model_)
 
+            tabpfn_expected_nll = tabpfn_nll.mean().item()
+            tabpfn_std_nll = tabpfn_nll.std().item()
+            
         # Test inputs
         phi, x, z = complete_distribution.sample()
 
@@ -240,6 +261,13 @@ def test_conjugate_prior(model: DistributionTransformer,
                     "pfn_expected_elbo": pfn_expected_elbo,
                     "pfn_std_elbo": pfn_std_elbo,
                 })
+        if "tabpfn" in competitor_kwargs:
+            _run.info.update({
+                "tabpfn_inference_time": tabpfn_inference_time,
+                "tabpfn_expected_nll": tabpfn_expected_nll,
+                "tabpfn_std_nll": tabpfn_std_nll,
+                "tabpfn_size": tabpfn_size
+            })
 
         # Plotting
         if plot:
@@ -279,6 +307,20 @@ def test_conjugate_prior(model: DistributionTransformer,
                 pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
                 pfn_posterior_plot = plot_distributions(exact_posterior, pfn_posterior, None,
                                                         None, bounds_func(phi_posterior_dict))
+            
+            if "tabpfn" in competitor_kwargs:
+                start_time = time()
+                tabpfn_posterior, _, _ = test_tabpfn(
+                    {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
+                    x.to("cpu"), 
+                    {key: val.to("cpu") for key, val in z.items()},
+                    complete_distribution,
+                    tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+                )
+                tabpfn_single_inference_time = time() - start_time
+                tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, exact_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -293,6 +335,11 @@ def test_conjugate_prior(model: DistributionTransformer,
                     pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.pdf", format="pdf")
                     _run.info.update({
                         "pfn_single_inference_time": pfn_single_inference_time
+                    })
+                if "tabpfn" in competitor_kwargs:
+                    tabpfn_posterior_plot.savefig(_run.observers[0].dir + "\\tabpfn_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "tabpfn_single_inference_time": tabpfn_single_inference_time
                     })
 
 
@@ -430,6 +477,28 @@ def test(model: DistributionTransformer,
                                               inverse_transform=Identity())
                 pfn_expected_elbo = pfn_elbo.mean().item()
                 pfn_std_elbo = pfn_elbo.std().item()
+        
+        if "tabpfn" in competitor_kwargs:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "pfns only supported for univariate output distributions"
+            
+            tabpfn_kwargs = copy(competitor_kwargs["tabpfn"])
+
+            start_time = time()
+            
+            _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
+                {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
+                x.to("cpu"), 
+                {key: val.to("cpu") for key, val in z.items()},
+                complete_distribution,
+                tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+            )
+            
+            tabpfn_inference_time = time() - start_time
+            tabpfn_size = get_model_size(tabpfn_regressor.model_)
+
+            tabpfn_expected_nll = tabpfn_nll.mean().item()
+            tabpfn_std_nll = tabpfn_nll.std().item()
 
         # Single problem run
 
@@ -481,6 +550,13 @@ def test(model: DistributionTransformer,
                         "pfn_expected_elbo": pfn_expected_elbo,
                         "pfn_std_elbo": pfn_std_elbo,
                     })
+            if "tabpfn" in competitor_kwargs:
+                _run.info.update({
+                    "tabpfn_inference_time": tabpfn_inference_time,
+                    "tabpfn_expected_nll": tabpfn_expected_nll,
+                    "tabpfn_std_nll": tabpfn_std_nll,
+                    "tabpfn_size": tabpfn_size
+                })
 
         # Plotting
         if plot:
@@ -522,6 +598,20 @@ def test(model: DistributionTransformer,
                 pfn_posterior_plot = plot_distributions(pfn_posterior, model_posterior, None,
                                                         model.sample_space_transform, bounds_func(phi_prior_dict),
                                                         n_kl_samples=None)
+            
+            if "tabpfn" in competitor_kwargs:
+                start_time = time()
+                tabpfn_posterior, _, _ = test_tabpfn(
+                    {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
+                    x.to("cpu"), 
+                    {key: val.to("cpu") for key, val in z.items()},
+                    complete_distribution,
+                    tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+                )
+                tabpfn_single_inference_time = time() - start_time
+                tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, model_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -537,6 +627,11 @@ def test(model: DistributionTransformer,
                     pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.pdf", format="pdf")
                     _run.info.update({
                         "pfn_single_inference_time": pfn_single_inference_time
+                    })
+                if "tabpfn" in competitor_kwargs:
+                    tabpfn_posterior_plot.savefig(_run.observers[0].dir + "\\tabpfn_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "tabpfn_single_inference_time": tabpfn_single_inference_time
                     })
 
 
