@@ -31,9 +31,8 @@ from distributions.distributions import (InverseGammaMetaPrior, ObservationModel
 from model.embeddings import DistributionEmbedding
 from model.distribution_transformer import DistributionTransformer
 from distributions.utils import gmm_bounds_func
-from workflows.train import train
-from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
+from experiments.sources.static.gp_predictive_hyperprior import NOISE_VAR
 
 class InverseGammaPrior(Prior, InverseGamma):
 
@@ -373,7 +372,7 @@ class GPPredictiveObservationModel(ObservationModel):
         self.n_observations = self.Dx.shape[-1]
         
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        self.likelihood.noise = 0.00011
+        self.likelihood.noise = NOISE_VAR
         
         if len(y_lengthscale.shape) - len(self.gp_prior.hyperparameter_batch_shape) > 1:
             sample_shape = y_lengthscale.shape[:1]

@@ -2,6 +2,7 @@
 Experiment evaluating method on problem of finding posterior for GP hyperparameters
 """
 
+from copy import copy
 from functools import partial
 from random import sample
 from typing import Union, Sequence, Callable, Optional
@@ -10,9 +11,15 @@ from sympy import hyper
 import torch
 from torch import Tensor
 from torch import nn
-from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal, Independent
+from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal, Independent, InverseGamma
 from torch.distributions.utils import lazy_property
 from torch.types import _size
+from competitor_methods.pfns import PFN
+from workflows.train import train_pfn
+from torch.nn import Module as TModule
+
+from gpytorch.priors.prior import Prior
+from gpytorch.priors.utils import _bufferize_attributes, _del_attributes
 
 from gpytorch import add_jitter
 from gpytorch.kernels import RBFKernel, ScaleKernel
@@ -25,10 +32,27 @@ from model.embeddings import DistributionEmbedding
 from model.distribution_transformer import DistributionTransformer
 from distributions.utils import gmm_bounds_func
 from workflows.train import train
-from workflows.test import test_gp
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 
-class ExactGPModel(gpytorch.models.ExactGP):
+
+NOISE_VAR = 0.001
+
+class InverseGammaPrior(Prior, InverseGamma):
+
+    def __init__(self, concentration, rate, validate_args=False, transform=None):
+        TModule.__init__(self)
+        InverseGamma.__init__(self, concentration=concentration, rate=rate, validate_args=validate_args)
+        _bufferize_attributes(self, ("concentration", "rate"))
+        self._transform = transform
+
+    def expand(self, batch_shape):
+        batch_shape = torch.Size(batch_shape)
+        return InverseGammaPrior(self.concentration.expand(batch_shape), self.rate.expand(batch_shape))
+
+    def __call__(self, *args, **kwargs):
+        return super(InverseGamma, self).__call__(*args, **kwargs)
+
+class  ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, mean_module, covar_module):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = mean_module
@@ -38,6 +62,7 @@ class ExactGPModel(gpytorch.models.ExactGP):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+    
     
 class GaussianEmbedding(DistributionEmbedding):
 
@@ -163,7 +188,9 @@ class MeanScaleMetaPrior(MetaPrior):
         '''
         Class for sampling the mean and scale paramaters for a GP prior
         '''
-        super().__init__(prior=GaussianProcessPrior)
+        marginalise_y = kwargs.get("marginalise_y", False)
+        marginalise_lengthscale = kwargs.get("marginalise_lengthscale", False)
+        super().__init__(prior=partial(GaussianProcessPrior, marginalise_y=marginalise_y, marginalise_lengthscale=marginalise_lengthscale))
 
         self.metapriors_keylist = ["loc", "covariance_matrix", "lengthscale_prior_concentration", "lengthscale_prior_rate"]
     
@@ -217,6 +244,8 @@ class GaussianProcessPrior(Distribution):
                  lengthscale_prior_rate: float,
                  loc: Tensor = torch.zeros(torch.Size()), 
                  covariance_matrix: Tensor = torch.ones(torch.Size()),
+                 marginalise_y=False, 
+                 marginalise_lengthscale=False
         ):
         self.loc = loc
         self.covariance_matrix = covariance_matrix
@@ -229,7 +258,7 @@ class GaussianProcessPrior(Distribution):
         self.dataset_size_low = dataset_size_low
         self.dataset_size_high = dataset_size_high
         self.x_domain_size = x_domain_size
-        self.lengthscale_prior = gpytorch.priors.GammaPrior(lengthscale_prior_concentration, lengthscale_prior_rate)
+        self.lengthscale_prior = InverseGammaPrior(lengthscale_prior_concentration, lengthscale_prior_rate)
 
         self.mean_function = ConstantMean(batch_shape=self.hyperparameter_batch_shape, event_shape=torch.Size([1]))
         self.mean_function.constant = self.loc
@@ -237,6 +266,11 @@ class GaussianProcessPrior(Distribution):
 
         # Mean is constant and kernel is stationary; prior of y is same regardless of x
         self.x_distribution = Uniform(0, torch.Tensor([self.x_domain_size] * x_dimensions))
+        
+        self.marginalise_y = marginalise_y
+        self.marginalise_lengthscale = marginalise_lengthscale
+        
+        assert not(marginalise_y and marginalise_lengthscale)
 
     @property
     def batch_shape(self):
@@ -244,6 +278,11 @@ class GaussianProcessPrior(Distribution):
 
     @property
     def event_shape(self):
+        if self.marginalise_y:
+            return torch.Size([1])
+        if self.marginalise_lengthscale:
+            return torch.Size([1])
+
         return torch.Size([2])
 
     def get_kernel(self, lengthscale, sample_shape=torch.Size([])):
@@ -268,10 +307,21 @@ class GaussianProcessPrior(Distribution):
         lengthscale = self.lengthscale_prior.sample(sample_shape).unsqueeze(-1)
         y = self.get_target_y_distribution(lengthscale, sample_shape).sample()
         
+        if self.marginalise_y:
+            return lengthscale 
+        if self.marginalise_lengthscale:
+            return y
+        
         y_lengthscale = torch.cat([y, lengthscale], dim=-1)
         return y_lengthscale
 
     def log_prob(self, value: torch.Tensor):
+        
+        if self.marginalise_y:
+            return self.lengthscale_prior.log_prob(value.squeeze(-1))
+        if self.marginalise_lengthscale:
+            raise ValueError("No closed form solution") 
+        
         sample_shape = value.shape[:-(len(self.hyperparameter_batch_shape)+1)]
         log_prob_lengthscale = self.lengthscale_prior.log_prob(value[...,1])
         log_prob_y_given_lengthscale = self.get_target_y_distribution(value[...,[1]], sample_shape).log_prob(value[...,[0]])
@@ -305,29 +355,49 @@ class GPPredictiveObservationModel(ObservationModel):
         assert observation_type in ["dataset", "query"]
 
         self.observation_type = observation_type
+        self.is_gaussian_process = True
     
-    def condition_(self, Dx, x, y_lengthscale, gp_prior: Distribution):
+    def condition_(self, y_lengthscale, Dx=None, x=None, gp_prior: Optional[Distribution]=None):
         
-        y = y_lengthscale[...,[0]]
-        lengthscale = y_lengthscale[...,[1]]
+        if y_lengthscale.shape[-1] == 2:
+            y = y_lengthscale[...,[0]]
+            lengthscale = y_lengthscale[...,[1]]
+        else:
+            y = None
+            lengthscale = y_lengthscale[...,[0]]
         
-        self.Dx = Dx
-        self.x = x 
-        self.y = y
-        self.lengthscale = lengthscale
+        self.Dx = Dx if Dx is not None else self.Dx
+        self.x = x if x is not None else self.x
+        self.y = y if y is not None else self.y
+        self.lengthscale = lengthscale if lengthscale is not None else self.lengthscale
+        self.gp_prior = gp_prior if gp_prior is not None else self.gp_prior
 
-        self.hyperparameter_batch_shape = gp_prior.hyperparameter_batch_shape
-        self.n_observations = Dx.shape[-1]
+        self.hyperparameter_batch_shape = self.gp_prior.hyperparameter_batch_shape
+        self.n_observations = self.Dx.shape[-1]
         
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        self.likelihood.noise = 0.001
-
-        self.gp_posterior = ExactGPModel(
-            self.x, self.y, self.likelihood, gp_prior.mean_function, gp_prior.get_kernel(lengthscale)
-        )
-        # We do not want to fit hypers, so we skip training
-        self.gp_posterior.eval()
-        self.conditional_distribution = self.gp_posterior(self.Dx)
+        self.likelihood.noise = NOISE_VAR
+        
+        if len(y_lengthscale.shape) - len(self.gp_prior.hyperparameter_batch_shape) > 1:
+            sample_shape = y_lengthscale.shape[:1]
+        else:
+            sample_shape = torch.Size([])
+        if y is None:
+            self.gp_posterior = ExactGPModel(
+                [], [], self.likelihood, self.gp_prior.mean_function, self.gp_prior.get_kernel(self.lengthscale, sample_shape)
+            )
+            # We do not want to fit hypers, so we skip training
+            self.gp_posterior.eval()
+            with gpytorch.settings.prior_mode(True):
+                self.conditional_distribution = self.gp_posterior(self.Dx)
+            
+        else:
+            self.gp_posterior = ExactGPModel(
+                self.x, self.y, self.likelihood, self.gp_prior.mean_function, self.gp_prior.get_kernel(self.lengthscale, sample_shape)
+            )
+            # We do not want to fit hypers, so we skip training
+            self.gp_posterior.eval()
+            self.conditional_distribution = self.gp_posterior(self.Dx)
     
     def sample(self, sample_shape = ...):
         if self.observation_type == "dataset":
@@ -363,15 +433,19 @@ class GPPredictiveObservationModel(ObservationModel):
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         device = value.device
         if self.observation_type == "dataset":
-            return self.conditional_distribution.log_prob(value)
+            return self.conditional_distribution.log_prob(value[...,-1].squeeze())
 
         elif self.observation_type == "query":
-            return torch.zeros_like(value, device=device)
+            return torch.zeros_like(self.lengthscale, device=device)
 
 
 class CompleteDistributionGPPredictive(CompleteDistribution):
-    def __init__(self, meta_prior, **observation_model):
+    def __init__(self, meta_prior, marginalise_y=False, marginalise_lengthscale=False, **observation_model):
         super().__init__(meta_prior, **observation_model)
+        self.marginalise_y = marginalise_y
+        self.marginalise_lengthscale = marginalise_lengthscale
+        
+        assert not(marginalise_y and marginalise_lengthscale), "Cannot marginalise both at the same time"
     
     def sample(self,
                sample_shape: _size = torch.Size(),
@@ -386,8 +460,17 @@ class CompleteDistributionGPPredictive(CompleteDistribution):
         prior = self.prior(**phi_decoded)
         Dx, x, y_lengthscale = prior.sample_fulldataset()
         for observation_model in self.observation_model.values():
-            observation_model.condition_(Dx, x, y_lengthscale, prior)
+            observation_model.condition_(Dx=Dx, x=x, y_lengthscale=y_lengthscale, gp_prior=prior)
         z = {key: observation_model.sample() for key, observation_model in self.observation_model.items()}
+        
+        y = y_lengthscale[...,[0]]
+        lengthscale = y_lengthscale[...,[1]]
+        
+        if self.marginalise_lengthscale:
+            return phi, y, z
+        
+        if self.marginalise_y:
+            return phi, lengthscale, z
 
         return phi, y_lengthscale, z
     
@@ -404,13 +487,23 @@ def run(n_components: int,
         _run=None,
         *args, **kwargs):
     
+    marginalise_y = kwargs.get("marginalise_y", False)
+    marginalise_lengthscale = kwargs.get("marginalise_lengthscale", False)
+    
+    assert not (marginalise_y and marginalise_lengthscale)
+    
     meta_prior = MeanScaleMetaPrior(**meta_prior_kwargs)
 
     observation_model = {observation_type: GPPredictiveObservationModel(observation_type=observation_type)
                          for observation_type in ["dataset", "query"]}
 
     # Complete distribution
-    complete_distribution = CompleteDistributionGPPredictive(meta_prior, **observation_model)
+    complete_distribution = CompleteDistributionGPPredictive(
+        meta_prior, 
+        marginalise_y=marginalise_y, 
+        marginalise_lengthscale=marginalise_lengthscale, 
+        **observation_model
+    )
 
     # Distribution transformer
     d_model = transformer_kwargs["d_model"]
@@ -418,18 +511,34 @@ def run(n_components: int,
     observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size= (meta_prior_kwargs["x_dimensions"] + (1 if key=="dataset" else 0)), **kwargs)
                              for key, kwargs in observation_embedding_kwargs.items()}
     prior_embedding = HyperpriorEmbedding(d_model=d_model,n_components=n_components,state_size=state_size, **distribution_embedding_kwargs, **component_embedding_kwargs)
+    
+    if marginalise_y:
+        sample_space_transform = torch.log
+    elif marginalise_lengthscale:
+        sample_space_transform = None
+    else:
+        sample_space_transform = lambda x: torch.stack([x[...,0], torch.log(x[...,1])], dim=-1)
+    
     model = DistributionTransformer(component_embedding=component_embedding,
                                     transformer_kwargs=transformer_kwargs,
                                     n_components=n_components,
                                     prior_embedding=prior_embedding,
-                                    sample_space_transform=None,
+                                    sample_space_transform=sample_space_transform,
                                     **observation_embedding)
+    
+    if "resume_path" in kwargs:
+        model.load_state_dict(torch.load(kwargs.get("resume_path"), weights_only=True))
 
     model, last_epoch_metrics = train(model, complete_distribution, _run=_run, **training_kwargs)
+    
+    meta_prior_pfn = MeanScaleMetaPrior(marginalise_lengthscale=True, **meta_prior_kwargs)
+    complete_distribution_pfn = CompleteDistributionGPPredictive(meta_prior_pfn, marginalise_lengthscale=True, **observation_model)
+    competitor_kwargs = testing_kwargs["competitor_kwargs"]
+    
 
-    test_gp(model, complete_distribution,
-         bounds_func=partial(gmm_bounds_func,
-                             scale_parametrisation=component_embedding_kwargs["scale_parametrisation"]),
-         linspace_size=1000,
-         hyperpior=True,
-         _run=_run, **testing_kwargs)
+    #test_gp(model, complete_distribution,
+    #     bounds_func=partial(gmm_bounds_func,
+    #                         scale_parametrisation=component_embedding_kwargs["scale_parametrisation"]),
+    #     linspace_size=1000,
+    #     hyperpior=True,
+    #     _run=_run, **testing_kwargs)
