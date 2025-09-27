@@ -187,10 +187,10 @@ def test_conjugate_prior(model: DistributionTransformer,
 
             start_time = time()
             
-            _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
-                {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
-                x.to("cpu"), 
-                {key: val.to("cpu") for key, val in z.items()},
+            tabpfn_posterior, tabpfn_nll, tabpfn_regressor = test_tabpfn(
+                {key: val for key, val in phi_prior_dict.items()}, 
+                x, 
+                {key: val for key, val in z.items()},
                 complete_distribution,
                 tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
             )
@@ -201,6 +201,12 @@ def test_conjugate_prior(model: DistributionTransformer,
             tabpfn_expected_nll = tabpfn_nll.mean().item()
             tabpfn_std_nll = tabpfn_nll.std().item()
             
+            tabpfn_posterior_kl_divergence = kl_divergence(exact_posterior, tabpfn_posterior,
+                                                        None,
+                                                        n_kl_samples)
+            tabpfn_expected_kl_divergence = tabpfn_posterior_kl_divergence.mean().item()
+            tabpfn_std_kl_divergence = tabpfn_posterior_kl_divergence.std().item()
+
         # Test inputs
         phi, x, z = complete_distribution.sample()
 
@@ -263,7 +269,9 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "tabpfn_inference_time": tabpfn_inference_time,
                 "tabpfn_expected_nll": tabpfn_expected_nll,
                 "tabpfn_std_nll": tabpfn_std_nll,
-                "tabpfn_size": tabpfn_size
+                "tabpfn_size": tabpfn_size,
+                "tabpfn_expected_kl_divergence": tabpfn_expected_kl_divergence,
+                "tabpfn_std_kl_divergence": tabpfn_std_kl_divergence
             })
 
         # Plotting
@@ -308,16 +316,15 @@ def test_conjugate_prior(model: DistributionTransformer,
             if "tabpfn" in competitor_kwargs:
                 start_time = time()
                 tabpfn_posterior, _, _ = test_tabpfn(
-                    {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
-                    x.to("cpu"), 
-                    {key: val.to("cpu") for key, val in z.items()},
+                    {key: val for key, val in phi_prior_dict.items()}, 
+                    x, 
+                    {key: val for key, val in z.items()},
                     complete_distribution,
                     tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
                 )
                 tabpfn_single_inference_time = time() - start_time
                 tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, exact_posterior, None,
-                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
-                                                        n_kl_samples=None)
+                                                        None, bounds_func(phi_posterior_dict))
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -484,9 +491,9 @@ def test(model: DistributionTransformer,
             start_time = time()
             
             _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
-                {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
-                x.to("cpu"), 
-                {key: val.to("cpu") for key, val in z.items()},
+                {key: val for key, val in phi_prior_dict.items()}, 
+                x, 
+                {key: val for key, val in z.items()},
                 complete_distribution,
                 tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
             )
@@ -599,9 +606,9 @@ def test(model: DistributionTransformer,
             if "tabpfn" in competitor_kwargs:
                 start_time = time()
                 tabpfn_posterior, _, _ = test_tabpfn(
-                    {key: val.to("cpu") for key, val in phi_prior_dict.items()}, 
-                    x.to("cpu"), 
-                    {key: val.to("cpu") for key, val in z.items()},
+                    {key: val for key, val in phi_prior_dict.items()}, 
+                    x, 
+                    {key: val for key, val in z.items()},
                     complete_distribution,
                     tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
                 )
