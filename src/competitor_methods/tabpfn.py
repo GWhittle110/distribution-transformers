@@ -1,5 +1,5 @@
 import torch
-import tqdm
+import time
 from competitor_methods.pfns import RiemannDistribution
 from tabpfn import TabPFNRegressor  
 
@@ -41,8 +41,13 @@ def test_tabpfn(
     regressor = TabPFNRegressor()
 
     regressor.fit(X_train.cpu(), Y_train.cpu())
+    
+    prediction_start_time = time.time()
 
     regressor_prediction = regressor.predict(X_test.cpu(), output_type="full")
+    
+    print("TabPFN prediction time:", time.time() - prediction_start_time)
+    
     logits = regressor_prediction['logits']
     criterion = regressor_prediction['criterion']
     

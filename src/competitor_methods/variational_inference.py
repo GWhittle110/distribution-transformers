@@ -25,6 +25,8 @@ class VI(nn.Module):
                  inverse_transform: Optional[Callable[[Tensor], Tensor]] = None,
                  initial_loc_std: float = 0.01,
                  initial_scale_tril_std: float = 0.01,
+                 lr: float = 0.1,
+                 lr_decay: float = 0.999,
                  *args, **kwargs):
         """
         Variational inference routine, fitting a Gaussian to the posterior by maximising an unbiased
@@ -42,6 +44,10 @@ class VI(nn.Module):
                 Defaults to 0.01.
             initial_scale_tril_std: Standard deviation of zero-mean normal scale_tril element initialisation.
                 Defaults to 0.01.
+            lr: Learning rate for optimizer.
+                Defaults to 0.1.
+            lr_decay: Decay constant for lr per iteration.
+                Defaults to 0.999.
 
         """
         super().__init__()
@@ -54,6 +60,9 @@ class VI(nn.Module):
         self.loc = nn.Parameter(initial_loc_std * torch.randn(*prior.batch_shape, state_size))
         self.scale_flat = nn.Parameter(initial_scale_tril_std * torch.randn(*prior.batch_shape,
                                                                             state_size * (state_size + 1) // 2))
+
+        self.lr = lr
+        self.lr_decay = lr_decay
 
     def distribution(self) -> MultivariateNormal:
         """
@@ -89,8 +98,8 @@ class VI(nn.Module):
         kl -= torch.logdet(vmap(jacrev(self.inverse_transform))(x.reshape(-1, self.state_size)
                                                                 ).reshape(n_samples, *self.prior.batch_shape,
                                                                           self.state_size, self.state_size))
-        # prob = self.distribution().log_prob(x)
-        # kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
+        prob = self.distribution().log_prob(x)
+        kl *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
         return kl.mean(dim=0)
 
     def posterior_loss(self, z: dict[str, Tensor],
@@ -129,16 +138,16 @@ class VI(nn.Module):
         if torch.is_grad_enabled():
             prob = distribution.log_prob(x)
             elbo *= torch.exp(prob - prob.clone().detach())  # Likelihood ratio / log derivative trick
-        return -elbo.mean(dim=0)
+        return -elbo.nanmean(dim=0)
 
     def fit(self, z: Optional[dict[str, Tensor]] = None,
             fit_prior: bool = False,
-            lr: float = 0.1,
-            lr_decay: float = 0.999,
             n_iters: int = 10000,
             n_samples: int = 1,
             ewma_gamma: float = 0.01,
             progress_bar: bool = True,
+            epoch: int = 1,
+            num_epochs: int = 1,
             *args, **kwargs) -> dict[str, Tensor]:
         """
         Fit either prior GMM by minimising KL divergence or posterior GMM by maximising ELBO.
@@ -148,10 +157,6 @@ class VI(nn.Module):
                 Defaults to None.
             fit_prior: Whether to fit prior (True) or posterior (False).
                 Defaults to posterior.
-            lr: Learning rate for optimizer.
-                Defaults to 0.1.
-            lr_decay: Decay constant for lr per iteration.
-                Defaults to 0.999.
             n_iters: Number of optimization steps to carry out.
                 Defaults to 1000.
             n_samples: Number of samples with which to estimate ELBO.
@@ -160,6 +165,10 @@ class VI(nn.Module):
                 Defaults to 0.1.
             progress_bar: Whether to include a progress bar.
                 Defaults to true.
+            epoch: Epoch number for progress tracking.
+                Defaults to 1.
+            num_epochs: Number of epochs for progress tracking.
+                Defaults to 1.
 
         Returns:
             Dictionary of GMM parameters, using the scale_tril scale parametrisation.
@@ -170,15 +179,15 @@ class VI(nn.Module):
         assert (z is None) == fit_prior, "z must be specified if fitting posterior"
 
         average_loss = 0
-        optimizer = Adam(self.parameters(), lr=lr)
-        scheduler = ExponentialLR(optimizer, lr_decay)
-        tqdm_iter = tqdm(range(n_iters), desc='VI Progress') if progress_bar else None
+        optimizer = Adam(self.parameters(), lr=self.lr)
+        scheduler = ExponentialLR(optimizer, self.lr_decay)
+        tqdm_iter = tqdm(range(n_iters), desc=f'VI Epoch {epoch+1}/{num_epochs}') if progress_bar else None
 
         for i in range(n_iters):
             tqdm_iter.update() if tqdm_iter is not None else None
             optimizer.zero_grad()
             loss = self.posterior_loss(z, n_samples) if z is not None else self.prior_loss(n_samples)
-            loss.sum().backward()
+            loss.nanmean().backward()
             optimizer.step()
             scheduler.step()
 
@@ -192,6 +201,7 @@ class VI(nn.Module):
                     tqdm_iter.set_postfix({"Mean ELBO": -average_loss.mean().item(),
                                            "LR": scheduler.get_last_lr()[0]})
 
+        self.lr *= self.lr_decay ** n_iters
         distribution = self.distribution()
         return {
             "loc": distribution.loc,

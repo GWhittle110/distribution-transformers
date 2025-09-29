@@ -5,10 +5,10 @@ seed: 0
 n_components: 5
 
 meta_prior_kwargs:
-  concentration1_concentration: 10000
-  concentration1_rate: 10000
-  concentration0_concentration: 10000
-  concentration0_rate: 10000
+  concentration1_concentration: 4
+  concentration1_rate: 6
+  concentration0_concentration: 4
+  concentration0_rate: 6
 
 initial_states_loc:
   obs_1: [1., 0.]
@@ -113,9 +113,9 @@ transformer_kwargs:
 
 training_kwargs:
   warmup_epochs: 5
-  epochs: 10
+  epochs: 20
   steps_per_epoch: 100
-  batch_size: 2000
+  batch_size: 5000
   lr: 0.001
   weight_decay: 0
   verbose: True
@@ -124,14 +124,15 @@ training_kwargs:
   save_loss_series: False
 
 testing_kwargs:
-  n_test_priors: 250
-  n_kl_samples: 10000
+  n_test_priors: 1000
+  n_kl_samples: 1000
   plot: True
   competitor_kwargs:
     vi:
       lr: 0.01
       lr_decay: 0.999
-      n_iters: 4000
+      n_iters: 100
+      repeats: 100
       n_samples: 10
       ewma_gamma: 0.01
       progress_bar: True
@@ -151,12 +152,15 @@ testing_kwargs:
       activation: gelu
       training_kwargs:
         warmup_epochs: 5
-        epochs: 20
+        epochs: 25
         steps_per_epoch: 100
-        batch_size: 5000
+        batch_size: 4000
         lr: 0.0001
         weight_decay: 0
         verbose: True
         progress_bar: True
         save_interval: -1
         save_loss_series: False
+      
+    tabpfn:
+      n_training_samples: 10000

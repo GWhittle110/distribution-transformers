@@ -2,6 +2,8 @@
 Testing workflow
 """
 
+from matplotlib import pyplot as plt
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Identity
@@ -11,6 +13,7 @@ from torch.distributions import MultivariateNormal, Distribution
 from time import time
 from typing import Callable, Optional
 from copy import copy
+from math import sqrt
 
 from model.distribution_transformer import DistributionTransformer
 from distributions.distributions import CompleteDistribution, GaussianMixtureModel, ObservationModel
@@ -503,6 +506,362 @@ def test(model: DistributionTransformer,
 
             tabpfn_expected_nll = tabpfn_nll.mean().item()
             tabpfn_std_nll = tabpfn_nll.std().item()
+
+        # Single problem run
+
+        # Test inputs
+        phi, x, z = complete_distribution.sample()
+
+        # Device
+        model.cpu()
+
+        phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+
+        # Model solution
+        start_time = time()
+        phi_in, phi_out = model(phi, **z)
+        model_single_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
+
+        if _run is not None:
+            _run.info.update({
+                "model_expected_prior_kl_divergence": model_expected_prior_kl_divergence,
+                "model_std_prior_kl_divergence": model_std_prior_kl_divergence,
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
+                "model_posterior_expected_nll": model_posterior_expected_nll,
+                "model_posterior_std_nll": model_posterior_std_nll,
+                "model_size": model_size,
+            })
+            if "vi" in competitor_kwargs:
+                _run.info.update({
+                    "vi_time": vi_time,
+                    "model_expected_elbo": model_expected_elbo,
+                    "model_std_elbo": model_std_elbo,
+                    "vi_expected_elbo": vi_expected_elbo,
+                    "vi_std_elbo": vi_std_elbo,
+                    "vi_expected_nll": vi_expected_nll,
+                    "vi_std_nll": vi_std_nll
+                })
+            if "pfns" in competitor_kwargs:
+                _run.info.update({
+                    "pfn_inference_time": pfn_inference_time,
+                    "pfn_expected_nll": pfn_expected_nll,
+                    "pfn_std_nll": pfn_std_nll,
+                    "pfn_size": pfn_size
+                })
+                if "vi" in competitor_kwargs:
+                    _run.info.update({
+                        "pfn_expected_elbo": pfn_expected_elbo,
+                        "pfn_std_elbo": pfn_std_elbo,
+                    })
+            if "tabpfn" in competitor_kwargs:
+                _run.info.update({
+                    "tabpfn_inference_time": tabpfn_inference_time,
+                    "tabpfn_expected_nll": tabpfn_expected_nll,
+                    "tabpfn_std_nll": tabpfn_std_nll,
+                    "tabpfn_size": tabpfn_size
+                })
+
+        # Plotting
+        if plot:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "plotting only supported for single output distributions"
+
+            if bounds_func is None:
+                def bounds_func(params_dict: dict[str, Tensor]) -> tuple[float, float]:
+                    dist = complete_distribution.meta_prior.prior(**params_dict)
+                    samples = dist.sample((10000,))
+                    samples = samples.sort().values
+                    return samples[499].item(), samples[9499].item()
+
+            prior_plot = plot_distributions(prior, model_prior, None, model.sample_space_transform,
+                                            bounds_func(phi_prior_dict), n_kl_samples=n_kl_samples)
+
+            if len(competitor_kwargs) == 0:
+                model_posterior_plot = plot_distributions(model_posterior, None, model.sample_space_transform,
+                                                          n_kl_samples=n_kl_samples)
+
+            if "vi" in competitor_kwargs:
+                vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform)
+                torch.set_grad_enabled(True)
+                start_time = time()
+                vi.fit(z, **competitor_kwargs["vi"])
+                vi_single_time = time() - start_time
+                torch.set_grad_enabled(False)
+                vi_posterior = vi.distribution()
+                vi_posterior_plot = plot_distributions(vi_posterior, model_posterior, model.sample_space_transform,
+                                                       model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                       n_kl_samples=None)
+
+            if "pfns" in competitor_kwargs:
+                pfn = pfn.cpu()
+                start_time = time()
+                phi_out = pfn(**z)
+                pfn_single_inference_time = time() - start_time
+                pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
+                pfn_posterior_plot = plot_distributions(pfn_posterior, model_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
+            
+            if "tabpfn" in competitor_kwargs:
+                start_time = time()
+                tabpfn_posterior, _, _ = test_tabpfn(
+                    {key: val for key, val in phi_prior_dict.items()}, 
+                    x, 
+                    {key: val for key, val in z.items()},
+                    complete_distribution,
+                    tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+                )
+                tabpfn_single_inference_time = time() - start_time
+                tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, model_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
+
+            if _run is not None:
+                prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
+                if len(competitor_kwargs) == 0:
+                    model_posterior_plot.savefig(_run.observers[0].dir + "\\model_posterior_plot.pdf", format="pdf")
+                if "vi" in competitor_kwargs:
+                    _run.info.update({
+                        "vi_single_time": vi_single_time
+                    })
+                    vi_posterior_plot.savefig(_run.observers[0].dir + "\\vi_posterior_plot.pdf", format="pdf")
+
+                if "pfns" in competitor_kwargs:
+                    pfn_posterior_plot.savefig(_run.observers[0].dir + "\\pfn_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "pfn_single_inference_time": pfn_single_inference_time
+                    })
+                if "tabpfn" in competitor_kwargs:
+                    tabpfn_posterior_plot.savefig(_run.observers[0].dir + "\\tabpfn_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "tabpfn_single_inference_time": tabpfn_single_inference_time
+                    })
+
+
+def test_quantum(model: DistributionTransformer,
+         complete_distribution: CompleteDistribution,
+         competitor_kwargs: Optional[dict[str, dict]] = None,
+         inverse_transform: Optional[Callable[[Tensor], Tensor]] = None,
+         n_test_priors: int = 1000,
+         n_kl_samples: int = 10000,
+         plot: bool = False,
+         bounds_func: Optional[Callable[[dict[str, Tensor]], tuple[float, float]]] = None,
+         gpu_device: str = "cuda:0",
+         _run=None
+         ) -> None:
+    """
+    Testing routine for quantum experiment
+
+    Args:
+        model: Model to Test.
+        complete_distribution: Complete distribution over priors, state and observation.
+        competitor_kwargs: Dictionary of dictionaries of parameters for competitor methods.
+            Defaults to None.
+        inverse_transform: Transform from sample space of GMM approximation to prior.
+            Defaults to None.
+        n_test_priors: Number of priors to test model with.
+            Defaults to 1000.
+        n_kl_samples: Number of samples to take when computing KL divergences.
+            Defaults to 10000.
+        plot: Whether to plot.
+            Defaults to False.
+        gpu_device: GPU device.
+            Defaults to "cuda:0".
+        bounds_func: Function to calculate plotting bounds from exact distribution parameters.
+            Defaults to an estimate of the 5-95%ile from 10000 samples
+        _run: Sacred run object.
+
+    """
+
+    with torch.no_grad():
+        competitor_kwargs = dict() if competitor_kwargs is None else competitor_kwargs
+
+        device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+
+        scale_parametrisation = model.component_embedding.scale_parametrisation
+
+        # Test inputs
+        phi, x, z = complete_distribution.sample((n_test_priors,))
+
+        # Device
+        phi = phi.to(device)
+        z = {key: val.to(device) for key, val in z.items()}
+        model = model.to(device)
+
+        # Exact prior
+        phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+        prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+
+        # Model solution
+        start_time = time()
+        phi_in, phi_out = model(phi.to(device), **z)
+        model_inference_time = time() - start_time
+        model_prior = GaussianMixtureModel(**decode_gmm_sample(phi_in, scale_parametrisation))
+        model_posterior = GaussianMixtureModel(**decode_gmm_sample(phi_out, scale_parametrisation))
+
+        prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
+                                            n_kl_samples)
+        model_expected_prior_kl_divergence = prior_kl_divergence.mean().item()
+        model_std_prior_kl_divergence = prior_kl_divergence.std().item()
+
+        model_posterior_nll = -model_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(model_posterior.batch_shape
+                                                                 + model_posterior.event_shape).to(device))
+        model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape
+                                                       + model_posterior.event_shape).to(device)
+                                             ).reshape(prior.batch_shape + model_posterior.event_shape
+                                                       + model_posterior.event_shape))
+        model_posterior_expected_nll = model_posterior_nll.mean().item()
+        model_posterior_std_nll = model_posterior_nll.std().item()
+        model_posterior_conf_nll = model_posterior_nll.std().item() * 1.96 / sqrt(n_test_priors)
+
+        model_size = get_model_size(model)
+
+        print(f"GMM approximation prior mean KL divergence: {prior_kl_divergence.mean().item()}")
+
+        if "vi" in competitor_kwargs:
+            # VI solution
+            vi = VI(model.state_size, prior, complete_distribution.observation_model, inverse_transform,
+                    **competitor_kwargs["vi"]).to(device)
+            vi_expected_nll_series = []
+            vi_conf_nll_series = []
+            vi_time_series = []
+            if "repeats" in competitor_kwargs["vi"]:
+                repeats = competitor_kwargs["vi"]["repeats"]
+            else:
+                repeats = 1
+
+            for i in range(repeats):
+                before_vi = time()
+                torch.set_grad_enabled(True)
+                vi.fit(z, epoch=i, num_epochs=repeats, **competitor_kwargs["vi"])
+                torch.set_grad_enabled(False)
+                vi_time = time() - before_vi
+                vi_nll = -vi.distribution().log_prob(model.sample_space_transform(x)
+                                                     .reshape(model_posterior.batch_shape
+                                                              + model_posterior.event_shape).to(device))
+                vi_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                       (x.reshape(model_posterior.batch_shape
+                                                  + model_posterior.event_shape).to(device)
+                                        ).reshape(prior.batch_shape + model_posterior.event_shape
+                                                  + model_posterior.event_shape))
+                vi_expected_nll = vi_nll.mean().item()
+                vi_std_nll = vi_nll.std().item()
+                vi_conf_nll = vi_nll.std().item() * 1.96 / sqrt(n_test_priors)
+                vi_expected_nll_series.append(vi_expected_nll)
+                
+                vi_conf_nll_series.append(vi_conf_nll)
+                vi_time_series.append(vi_time)
+
+            vi_time = sum(vi_time_series)
+            vi_time_series = np.array(vi_time_series).cumsum()
+
+            vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
+            vi_expected_elbo = vi_elbo.mean().item()
+            vi_std_elbo = vi_elbo.std().item()
+
+            model_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=model_posterior)
+            model_expected_elbo = model_elbo.mean().item()
+            model_std_elbo = model_elbo.std().item()
+
+        if "pfns" in competitor_kwargs:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "pfns only supported for univariate output distributions"
+            # PFN solution
+            pfn_kwargs = copy(competitor_kwargs["pfns"])
+            del pfn_kwargs["training_kwargs"]
+            pfn = PFN(**pfn_kwargs, **model.observation_embeddings)
+            torch.set_grad_enabled(True)
+            pfn, _ = train_pfn(pfn, complete_distribution, _run=_run, **competitor_kwargs["pfns"]["training_kwargs"])
+            torch.set_grad_enabled(False)
+            pfn = pfn.to(device)
+            start_time = time()
+            phi_out = pfn(**z)
+            pfn_inference_time = time() - start_time
+            pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
+
+            pfn_nll = -pfn_posterior.log_prob(x.reshape(pfn_posterior.batch_shape).to(device))
+            pfn_expected_nll = pfn_nll.mean().item()
+            pfn_std_nll = pfn_nll.std().item()
+
+            pfn_size = get_model_size(pfn)
+            pfn_conf_nll = pfn_nll.std().item() * 1.96 / sqrt(n_test_priors)
+
+            if "vi" in competitor_kwargs:
+                pfn_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=pfn_posterior,
+                                              inverse_transform=Identity())
+                pfn_expected_elbo = pfn_elbo.mean().item()
+                pfn_std_elbo = pfn_elbo.std().item()
+        
+        if "tabpfn" in competitor_kwargs:
+            assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
+                "pfns only supported for univariate output distributions"
+            
+            tabpfn_kwargs = copy(competitor_kwargs["tabpfn"])
+
+            start_time = time()
+            
+            _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
+                {key: val for key, val in phi_prior_dict.items()}, 
+                x, 
+                {key: val for key, val in z.items()},
+                complete_distribution,
+                tabpfn_trainsize=tabpfn_kwargs["n_training_samples"]
+            )
+            
+            tabpfn_inference_time = time() - start_time
+            tabpfn_size = get_model_size(tabpfn_regressor.model_)
+
+            tabpfn_expected_nll = tabpfn_nll.mean().item()
+            tabpfn_conf_nll = tabpfn_nll.std().item() * 1.96 / sqrt(n_test_priors)
+            tabpfn_std_nll = tabpfn_nll.std().item()
+            
+        if "vi" in competitor_kwargs:
+            # Plot loss timeseries
+            plt.style.use(['seaborn-v0_8-paper'])
+            fig, ax = plt.subplots()
+            legend_order = []
+            ax.plot(vi_time_series, vi_expected_nll_series,
+                    "-", color="tab:orange")
+            legend_order.append("SVI")
+            if "pfns" in competitor_kwargs:
+                ax.plot([pfn_inference_time, vi_time_series[-1]], [pfn_expected_nll] * 2,
+                        "--", color="tab:green")
+                legend_order.append("PFN")
+            if "tabpfn" in competitor_kwargs:
+                ax.plot([tabpfn_inference_time, vi_time_series[-1]], [tabpfn_expected_nll] * 2,
+                        "--", color="tab:red")
+                legend_order.append("TabPFNv2")
+            ax.plot([model_inference_time, vi_time_series[-1]], [model_posterior_expected_nll] * 2,
+                    "--", color="tab:blue")
+            ax.legend(legend_order + ["Distribution Transformer"])
+            ax.fill_between(vi_time_series, np.array(vi_expected_nll_series) + np.array(vi_conf_nll_series),
+                            np.array(vi_expected_nll_series) - np.array(vi_conf_nll_series),
+                            color="tab:orange", alpha=0.5)
+            if "pfns" in competitor_kwargs:
+                ax.fill_between([pfn_inference_time, vi_time_series[-1]],
+                                np.array([pfn_expected_nll] * 2) + np.array([pfn_conf_nll] * 2),
+                                np.array([pfn_expected_nll] * 2) - np.array([pfn_conf_nll] * 2),
+                                color="tab:green", alpha=0.5)
+            if "tabpfn" in competitor_kwargs:
+                ax.fill_between([tabpfn_inference_time, vi_time_series[-1]],
+                                np.array([tabpfn_expected_nll] * 2) + np.array([tabpfn_conf_nll] * 2),
+                                np.array([tabpfn_expected_nll] * 2) - np.array([tabpfn_conf_nll] * 2),
+                                color="tab:red", alpha=0.5)
+            ax.fill_between([model_inference_time, vi_time_series[-1]],
+                            np.array([model_posterior_expected_nll] * 2) + np.array([model_posterior_conf_nll] * 2),
+                            np.array([model_posterior_expected_nll] * 2) - np.array([model_posterior_conf_nll] * 2),
+                            color="tab:blue", alpha=0.5)
+            ax.set_xlabel(f"Inference Time per {n_test_priors} Problem Batch (s)")
+            ax.set_ylabel("Negative Log-Likelihood")
+            ax.set_xscale("log")
+            fig.savefig(_run.observers[0].dir + "\\loss_series.pdf", format="pdf")
+            plt.show()
 
         # Single problem run
 
