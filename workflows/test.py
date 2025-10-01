@@ -22,7 +22,8 @@ from competitor_methods.variational_inference import VI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from competitor_methods.ekf import EKF
 from competitor_methods.tabpfn import test_tabpfn
-from workflows.train import train_pfn
+from competitor_methods.ace import get_ace_model, predict_w_ace
+from workflows.train import train_pfn, train_ace
 from workflows.utils import get_model_size
 from dynamic.motion_models import LTIMotionModel
 from dynamic.filters import LTIFilter
@@ -209,6 +210,33 @@ def test_conjugate_prior(model: DistributionTransformer,
                                                         n_kl_samples)
             tabpfn_expected_kl_divergence = tabpfn_posterior_kl_divergence.mean().item()
             tabpfn_std_kl_divergence = tabpfn_posterior_kl_divergence.std().item()
+            
+        if "ace" in competitor_kwargs:
+
+            # ACE solution
+            ace_kwargs = copy(competitor_kwargs["ace"])
+            del ace_kwargs["training_kwargs"]
+
+            size_of_x = torch.tensor(prior.event_shape).item() if torch.tensor(prior.event_shape).numel() > 0 else 1
+            num_latent = size_of_x + complete_distribution.meta_prior.prior_size + sum(obs.n_observations for obs in complete_distribution.observation_model.values())
+            ace = get_ace_model(num_latent=num_latent, **ace_kwargs['transformer_kwargs'])
+            torch.set_grad_enabled(True)
+            ace, _ = train_ace(ace, complete_distribution, sample_space_transform=model.sample_space_transform, _run=_run, **competitor_kwargs["ace"]["training_kwargs"])
+            torch.set_grad_enabled(False)
+            
+            start_time = time()
+            ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
+            ace_inference_time = time() - start_time
+            
+            ace_posterior_kl_divergence = kl_divergence(exact_posterior, ace_posterior, model.sample_space_transform, n_kl_samples)
+            ace_expected_kl_divergence = ace_posterior_kl_divergence.mean().item()
+            ace_std_kl_divergence = ace_posterior_kl_divergence.std().item()
+
+            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_expected_nll = ace_nll.mean().item()
+            ace_std_nll = ace_nll.std().item()
+            
+            ace_size = get_model_size(ace)
 
         # Test inputs
         phi, x, z = complete_distribution.sample()
@@ -276,6 +304,15 @@ def test_conjugate_prior(model: DistributionTransformer,
                 "tabpfn_expected_kl_divergence": tabpfn_expected_kl_divergence,
                 "tabpfn_std_kl_divergence": tabpfn_std_kl_divergence
             })
+        if "ace" in competitor_kwargs:
+            _run.info.update({
+                "ace_inference_time": ace_inference_time,
+                "ace_expected_nll": ace_expected_nll,
+                "ace_std_nll": ace_std_nll,
+                "ace_expected_kl_divergence": ace_expected_kl_divergence,
+                "ace_std_kl_divergence": ace_std_kl_divergence,
+                "ace_size": ace_size
+            })
 
         # Plotting
         if plot:
@@ -328,6 +365,14 @@ def test_conjugate_prior(model: DistributionTransformer,
                 tabpfn_single_inference_time = time() - start_time
                 tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, exact_posterior, None,
                                                         None, bounds_func(phi_posterior_dict))
+            
+            if "ace" in competitor_kwargs:
+                ace = ace.cpu()
+                start_time = time()
+                ace_posterior = predict_w_ace(phi, x, z, ace)
+                ace_single_inference_time = time() - start_time
+                ace_posterior_plot = plot_distributions(exact_posterior, ace_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_posterior_dict))
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -347,6 +392,11 @@ def test_conjugate_prior(model: DistributionTransformer,
                     tabpfn_posterior_plot.savefig(_run.observers[0].dir + "\\tabpfn_posterior_plot.pdf", format="pdf")
                     _run.info.update({
                         "tabpfn_single_inference_time": tabpfn_single_inference_time
+                    })
+                if "ace" in competitor_kwargs:
+                    ace_posterior_plot.savefig(_run.observers[0].dir + "\\ace_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "ace_single_inference_time": ace_single_inference_time
                     })
 
 
@@ -506,6 +556,29 @@ def test(model: DistributionTransformer,
 
             tabpfn_expected_nll = tabpfn_nll.mean().item()
             tabpfn_std_nll = tabpfn_nll.std().item()
+        
+        if "ace" in competitor_kwargs:
+
+            # ACE solution
+            ace_kwargs = copy(competitor_kwargs["ace"])
+            del ace_kwargs["training_kwargs"]
+
+            size_of_x = torch.tensor(prior.event_shape).item() if torch.tensor(prior.event_shape).numel() > 0 else 1
+            num_latent = size_of_x + complete_distribution.meta_prior.prior_size + sum(obs.n_observations for obs in complete_distribution.observation_model.values())
+            ace = get_ace_model(num_latent=num_latent, **ace_kwargs['transformer_kwargs'])
+            torch.set_grad_enabled(True)
+            ace, _ = train_ace(ace, complete_distribution, sample_space_transform=model.sample_space_transform, _run=_run, **competitor_kwargs["ace"]["training_kwargs"])
+            torch.set_grad_enabled(False)
+            
+            start_time = time()
+            ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
+            ace_inference_time = time() - start_time
+
+            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_expected_nll = ace_nll.mean().item()
+            ace_std_nll = ace_nll.std().item()
+            
+            ace_size = get_model_size(ace)
 
         # Single problem run
 
@@ -565,6 +638,14 @@ def test(model: DistributionTransformer,
                     "tabpfn_size": tabpfn_size
                 })
 
+            if "ace" in competitor_kwargs:
+                _run.info.update({
+                    "ace_inference_time": ace_inference_time,
+                    "ace_expected_nll": ace_expected_nll,
+                    "ace_std_nll": ace_std_nll,
+                    "ace_size": ace_size
+                })
+
         # Plotting
         if plot:
             assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
@@ -620,6 +701,15 @@ def test(model: DistributionTransformer,
                                                         model.sample_space_transform, bounds_func(phi_prior_dict),
                                                         n_kl_samples=None)
 
+            if "ace" in competitor_kwargs:
+                ace = ace.cpu()
+                start_time = time()
+                ace_posterior = predict_w_ace(phi, x, z, ace)
+                ace_single_inference_time = time() - start_time
+                ace_posterior_plot = plot_distributions(ace_posterior, model_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
+
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
                 if len(competitor_kwargs) == 0:
@@ -639,6 +729,11 @@ def test(model: DistributionTransformer,
                     tabpfn_posterior_plot.savefig(_run.observers[0].dir + "\\tabpfn_posterior_plot.pdf", format="pdf")
                     _run.info.update({
                         "tabpfn_single_inference_time": tabpfn_single_inference_time
+                    })
+                if "ace" in competitor_kwargs:
+                    ace_posterior_plot.savefig(_run.observers[0].dir + "\\ace_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "ace_single_inference_time": ace_single_inference_time
                     })
 
 
@@ -862,6 +957,33 @@ def test_quantum(model: DistributionTransformer,
             ax.set_xscale("log")
             fig.savefig(_run.observers[0].dir + "\\loss_series.pdf", format="pdf")
             plt.show()
+        
+        if "ace" in competitor_kwargs:
+            # ACE solution
+            ace_kwargs = copy(competitor_kwargs["ace"])
+            del ace_kwargs["training_kwargs"]
+
+            size_of_x = torch.tensor(prior.event_shape).item() if torch.tensor(prior.event_shape).numel() > 0 else 1
+            size_of_phi = complete_distribution.meta_prior.prior_size 
+            size_of_z = sum(
+                torch.tensor(obs.event_shape).item() if torch.tensor(obs.event_shape).numel() > 0 else 1
+                for obs in complete_distribution.observation_model.values()
+            )
+            num_latent = size_of_x + size_of_phi + size_of_z
+            ace = get_ace_model(num_latent=num_latent, **ace_kwargs['transformer_kwargs'])
+            torch.set_grad_enabled(True)
+            ace, _ = train_ace(ace, complete_distribution, sample_space_transform=model.sample_space_transform, _run=_run, **competitor_kwargs["ace"]["training_kwargs"])
+            torch.set_grad_enabled(False)
+            
+            start_time = time()
+            ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
+            ace_inference_time = time() - start_time
+
+            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_expected_nll = ace_nll.mean().item()
+            ace_std_nll = ace_nll.std().item()
+            
+            ace_size = get_model_size(ace)
 
         # Single problem run
 
@@ -920,6 +1042,13 @@ def test_quantum(model: DistributionTransformer,
                     "tabpfn_std_nll": tabpfn_std_nll,
                     "tabpfn_size": tabpfn_size
                 })
+            if "ace" in competitor_kwargs:
+                _run.info.update({
+                    "ace_inference_time": ace_inference_time,
+                    "ace_expected_nll": ace_expected_nll,
+                    "ace_std_nll": ace_std_nll,
+                    "ace_size": ace_size
+                })
 
         # Plotting
         if plot:
@@ -975,6 +1104,15 @@ def test_quantum(model: DistributionTransformer,
                 tabpfn_posterior_plot = plot_distributions(tabpfn_posterior, model_posterior, None,
                                                         model.sample_space_transform, bounds_func(phi_prior_dict),
                                                         n_kl_samples=None)
+            
+            if "ace" in competitor_kwargs:
+                ace = ace.cpu()
+                start_time = time()
+                ace_posterior = predict_w_ace(phi, x, z, ace)
+                ace_single_inference_time = time() - start_time
+                ace_posterior_plot = plot_distributions(ace_posterior, model_posterior, None,
+                                                        model.sample_space_transform, bounds_func(phi_prior_dict),
+                                                        n_kl_samples=None)
 
             if _run is not None:
                 prior_plot.savefig(_run.observers[0].dir + "\\prior_plot.pdf", format="pdf")
@@ -996,7 +1134,11 @@ def test_quantum(model: DistributionTransformer,
                     _run.info.update({
                         "tabpfn_single_inference_time": tabpfn_single_inference_time
                     })
-
+                if "ace" in competitor_kwargs:
+                    ace_posterior_plot.savefig(_run.observers[0].dir + "\\ace_posterior_plot.pdf", format="pdf")
+                    _run.info.update({
+                        "ace_single_inference_time": ace_single_inference_time
+                    })
 
 def test_lti_filter(model: DistributionTransformer,
                     motion_model: LTIMotionModel,
