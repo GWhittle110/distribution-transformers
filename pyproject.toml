@@ -5,9 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "distribution_transformers"
-authors = [
-    {name = "George Whittle", email = "george.whittle@reuben.ox.ac.uk"}
-]
+
 version = "0.0.0"
 dependencies = [
     "torch>=2.5.0",
@@ -15,7 +13,10 @@ dependencies = [
     "scikit-learn",
     "threadpoolctl>=3.0.0",
     "matplotlib",
-    "gpytorch"
+    "gpytorch",
+    "sacred",
+    "pytest (>=8.4.2,<9.0.0)",
+    "pyyaml (>=6.0.3,<7.0.0)",
 ]
 requires-python = ">=3.12.0"
 
