@@ -126,8 +126,33 @@ training_kwargs:
 testing_kwargs:
   n_test_priors: 1000
   n_kl_samples: 1000
-  plot: True
+  plot: False
   competitor_kwargs:
+    ace:
+        transformer_kwargs:
+          d_model: 64
+          n_head: 8
+          dim_feedforward: 2048
+          dropout: 0
+          num_layers: 6
+          activation: gelu
+          dim_y: 1
+          dim_yc: 1
+          dim_xc: 2
+          num_components: 5
+          emb_depth: 5
+        training_kwargs:
+          warmup_epochs: 5
+          epochs: 20
+          steps_per_epoch: 100
+          batch_size: 5000
+          lr: 0.0001
+          weight_decay: 0
+          verbose: True
+          progress_bar: True
+          save_interval: -1
+          save_loss_series: False
+          randomise_target: False
     vi:
       lr: 0.01
       lr_decay: 0.999
@@ -164,3 +189,4 @@ testing_kwargs:
       
     tabpfn:
       n_training_samples: 10000
+
