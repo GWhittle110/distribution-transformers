@@ -1039,6 +1039,34 @@ class CompleteDistribution(Distribution):
         return phi, x, z
 
 
+class FactorStructureStochasticVolatility(ObservationModel):
+    arg_constraints = {}
+
+    def __init__(self, mean_return: Tensor,
+                 factor_loadings: Tensor,
+                 residual_covariance: Tensor):
+        """
+        Multivariate Factor Structure Stochastic Volatility model, as laid out in
+        https://rodneywhitecenter.wharton.upenn.edu/wp-content/uploads/2014/04/9519.pdf
+
+        Args:
+            mean_return: Vector of mean returns
+            factor_loadings: Factor loadings matrix
+            residual_covariance: Covariance matrix of stock noise not explained by factors
+        """
+        super().__init__()
+        self.mean_return = mean_return
+        self.factor_loadings = factor_loadings
+        self.residual_covariance = residual_covariance
+
+        self.n_observations = mean_return.shape[-1]
+
+    def condition_(self, x: Tensor):
+        self.device = x.device
+        covariance_matrix = torch.einsum("...ij, ...j, ...kj -> ...ik", self.factor_loadings, torch.exp(x), self.factor_loadings) + self.residual_covariance
+        self.distribution = MultivariateNormal(self.mean_return, covariance_matrix)
+
+
 class RangefinderObservationModel(ObservationModel):
     arg_constraints = {"scale": constraints.positive,
                        "rate": constraints.positive,

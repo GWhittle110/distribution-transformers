@@ -53,6 +53,7 @@ class LTIFilter(Filter):
 
         self.state_transition_matrix = motion_model.state_transition_matrix
         self.process_noise_covariance_matrix = motion_model.process_noise_covariance_matrix
+        self.constant_vector = motion_model.constant_vector
 
     def filter(self, observation_series: dict[str, Tensor],
                x0_distribution: MultivariateNormal
@@ -73,6 +74,7 @@ class LTIFilter(Filter):
         device = list(observation_series.values())[0].device
         state_transition_matrix = self.state_transition_matrix.to(device)
         process_noise_covariance_matrix = self.process_noise_covariance_matrix.to(device)
+        constant_vector = self.constant_vector.to(device)
 
         batched_series_shape = list(observation_series.values())[0].shape[:-1]
         batch_shape = batched_series_shape[1:]
@@ -100,8 +102,9 @@ class LTIFilter(Filter):
             _, posterior_params = self.model(prior_params, **dict(zip(observation_series, observations)))
             filtered_params[i] = posterior_params
             prior_params_dict = decode_gmm_sample(posterior_params, scale_parametrisation)
-            prior_params_dict["loc"] = torch.einsum("...ij, ...j -> ...i",
-                                                    state_transition_matrix, prior_params_dict["loc"])
+            prior_params_dict["loc"] = (constant_vector +
+                                        torch.einsum("...ij, ...j -> ...i",
+                                                     state_transition_matrix, prior_params_dict["loc"]))
 
             match scale_parametrisation:
                 case "covariance_matrix":

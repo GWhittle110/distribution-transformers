@@ -23,7 +23,7 @@ from competitor_methods.ekf import EKF
 from competitor_methods.particle_filter import ParticleFilter
 from workflows.train import train_pfn
 from workflows.utils import get_model_size
-from dynamic.motion_models import LTIMotionModel
+from dynamic.motion_models import LTIMotionModel, DecoupledStochasticVolatilityMotionModel
 from dynamic.filters import LTIFilter
 from dynamic.utils import plot_filtered_series
 
@@ -740,6 +740,194 @@ def test_lti_filter(model: DistributionTransformer,
                     gpu_device: str = "cuda:0",
                     _run=None
                     ) -> None:
+    """
+    Test model on Bayesian filtering task. Currently restricted to GMM initial priors.
+
+    Args:
+        model: Model to test.
+        motion_model: Motion model for dynamical system.
+        observation_model: Observation model for dynamical system.
+        competitor_kwargs: Kwargs for competitor methods.
+            Defaults to None.
+        series_length: Length of series to test on.
+            Defaults to 1000.
+        n_test_series: Number of series to test on.
+            Defaults to 1000.
+        plotting_kwargs: Plotting kwargs. Set to None to disable plotting.
+            Defaults to NOne.
+        gpu_device: GPU device to test on.
+            Defaults to cuda:0.
+        _run: Sacred run object.
+
+    Returns:
+
+    """
+    with torch.no_grad():
+        device = gpu_device if torch.cuda.is_available() else 'cpu:0'
+        model.to(device)
+        scale_parametrisation = model.component_embedding.scale_parametrisation
+
+        model_size = get_model_size(model)
+
+        series = motion_model.sample((series_length, n_test_series))
+
+        for obs_model in observation_model.values():
+            obs_model.condition_(series)
+
+        observation_series = {key: obs_model.sample().to(device) for key, obs_model in observation_model.items()}
+
+        # Model solution
+        filter = LTIFilter(model, motion_model)
+
+        start_time = time()
+        filtered_series_dict, _ = filter.filter(observation_series, motion_model.x0_distribution)
+        model_density = GaussianMixtureModel(**filtered_series_dict)
+        model_inference_time = (time() - start_time) / series_length
+
+        model_nll = -model_density.log_prob(series)
+        model_expected_nll = model_nll.mean().item()
+        model_conf_nll = model_nll.std().item() * 1.96 / sqrt(n_test_series * series_length)
+
+        if "ekf" in competitor_kwargs:
+            ekf = EKF(model.state_size, motion_model, **observation_model)
+
+            start_time = time()
+            ekf_filtered_series_dict, _ = ekf.filter(observation_series, motion_model.x0_distribution)
+            ekf_density = MultivariateNormal(**ekf_filtered_series_dict)
+            ekf_inference_time = (time() - start_time) / series_length
+
+            ekf_nll = -ekf_density.log_prob(series)
+            ekf_expected_nll = ekf_nll.mean().item()
+            ekf_conf_nll = ekf_nll.std().item() * 1.96 / sqrt(n_test_series * series_length)
+
+        if "particle_filter" in competitor_kwargs:
+            particle_filter = ParticleFilter(model.state_size, motion_model, **observation_model,
+                                             **competitor_kwargs["particle_filter"])
+
+            start_time = time()
+            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+            particle_filter_distribution = particle_filter.fit_density(particles)
+            particle_filter_inference_time = (time() - start_time) / series_length
+
+
+            particle_filter_nll = -particle_filter_distribution.log_prob(series)
+            particle_filter_expected_nll = particle_filter_nll.mean().item()
+            particle_filter_conf_nll = particle_filter_nll.std().item() * 1.96 / sqrt(n_test_series * series_length)
+
+
+        # Single problem run
+
+        # Device
+        model.cpu()
+
+        series = motion_model.sample((series_length,))
+
+        for obs_model in observation_model.values():
+            obs_model.condition_(series)
+
+        observation_series = {key: obs_model.sample().cpu() for key, obs_model in observation_model.items()}
+
+        # Model solution
+        filter = LTIFilter(model, motion_model)
+
+        start_time = time()
+        filtered_series_dict, _ = filter.filter(observation_series, motion_model.x0_distribution)
+        model_filter_distribution = GaussianMixtureModel(**filtered_series_dict)
+        model_single_inference_time = (time() - start_time) / series_length
+
+        if "ekf" in competitor_kwargs:
+            start_time = time()
+            ekf_filtered_series_dict, _ = ekf.filter(observation_series, motion_model.x0_distribution)
+            ekf_filter_distribution = MultivariateNormal(**ekf_filtered_series_dict)
+            ekf_single_inference_time = (time() - start_time) / series_length
+
+        if "particle_filter" in competitor_kwargs:
+            start_time = time()
+            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+            particle_filter_distribution = particle_filter.fit_density(particles)
+            particle_filter_single_inference_time = (time() - start_time) / series_length
+
+        if _run is not None:
+            _run.info.update({
+                "model_inference_time": model_inference_time,
+                "model_single_inference_time": model_single_inference_time,
+                "model_expected_nll": model_expected_nll,
+                "model_conf_nll": model_conf_nll,
+                "model_size": model_size,
+            })
+            if "ekf" in competitor_kwargs:
+                _run.info.update({
+                    "ekf_inference_time": ekf_inference_time,
+                    "ekf_single_inference_time": ekf_single_inference_time,
+                    "ekf_expected_nll": ekf_expected_nll,
+                    "ekf_conf_nll": ekf_conf_nll,
+                })
+            if "particle_filter" in competitor_kwargs:
+                _run.info.update({
+                    "particle_filter_inference_time": particle_filter_inference_time,
+                    "particle_filter_single_inference_time": particle_filter_single_inference_time,
+                    "particle_filter_expected_nll": particle_filter_expected_nll,
+                    "particle_filter_conf_nll": particle_filter_conf_nll,
+                })
+
+        # Plotting first dimension of state space
+        if plotting_kwargs is not None:
+            # Select dimension
+            dim = plotting_kwargs["dim"]
+
+            filtered_series_dict["loc"] = filtered_series_dict["loc"][..., dim].unsqueeze(-1)
+            filtered_series_dict[scale_parametrisation] = \
+                filtered_series_dict[scale_parametrisation].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
+                    -1).unsqueeze(-1)
+            filtered_series = encode_gmm_sample(filtered_series_dict, scale_parametrisation)
+            model_filter_distribution = GaussianMixtureModel(**filtered_series_dict)
+
+            """
+            bounds = list(zip(*[gmm_bounds_func(decode_gmm_sample(dist, scale_parametrisation))
+                                for dist in filtered_series]))
+            bounds = (max(bounds[0]), min(bounds[1]))
+            bounds = (max(bounds[0], series.max().item() + 1), min(bounds[1], series.min().item() - 1))
+            """
+
+            bounds = None
+
+            model_series_plot = plot_filtered_series(model_filter_distribution, series[..., dim].unsqueeze(-1), bounds,
+                                                     **plotting_kwargs)
+
+            if "ekf" in competitor_kwargs and "particle_filter" in competitor_kwargs:
+                ekf_filtered_series_dict["loc"] = ekf_filtered_series_dict["loc"][..., dim].unsqueeze(-1)
+                ekf_filtered_series_dict["covariance_matrix"] = \
+                    ekf_filtered_series_dict["covariance_matrix"].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
+                        -1).unsqueeze(-1)
+                ekf_filter_distribution = MultivariateNormal(**ekf_filtered_series_dict)
+                ekf_series_plot = plot_filtered_series(ekf_filter_distribution, series[..., dim].unsqueeze(-1), bounds,
+                                                       **plotting_kwargs)
+                combined_series_plot = plot_filtered_series([ekf_filter_distribution,
+                                                             model_filter_distribution],
+                                                            series[..., dim].unsqueeze(-1), bounds,
+                                                            cmaps=["OrRd", "BuPu"],
+                                                            legend_labels=["EKF Filter Density",
+                                                                           "Distribution Transformer Filter Density"],
+                                                            **plotting_kwargs)
+
+            if _run is not None:
+                model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.pdf", format="pdf")
+
+                if "ekf" in competitor_kwargs:
+                    ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.pdf", format="pdf")
+                    combined_series_plot.savefig(_run.observers[0].dir + "\\combined_series_plot.pdf", format="pdf")
+
+
+def test_factor_stochastic_volatility(model: DistributionTransformer,
+                                      motion_model: DecoupledStochasticVolatilityMotionModel,
+                                      observation_model: dict[str, ObservationModel],
+                                      competitor_kwargs: Optional[dict[str, dict]] = None,
+                                      series_length: int = 1000,
+                                      n_test_series: int = 1000,
+                                      plotting_kwargs: Optional[dict] = None,
+                                      gpu_device: str = "cuda:0",
+                                      _run=None
+                                      ) -> None:
     """
     Test model on Bayesian filtering task. Currently restricted to GMM initial priors.
 
