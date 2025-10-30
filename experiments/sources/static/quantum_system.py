@@ -13,7 +13,7 @@ from distributions.distributions import BetaMetaPrior, ObservationModel, Complet
 from model.distribution_transformer import DistributionTransformer
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 from workflows.train import train
-from workflows.test import test
+from workflows.test import test_quantum
 
 
 class QuantumSystemObservationModel(ObservationModel):
@@ -146,5 +146,5 @@ def run(n_components: int,
     def bounds_func(phi: dict[str, Tensor]) -> tuple[float, float]:
         return 1e-6, 1.-1e-6
 
-    test(model, n_components, complete_distribution, inverse_transform=torch.sigmoid, bounds_func=bounds_func,
+    test_quantum(model, complete_distribution, inverse_transform=torch.sigmoid, bounds_func=bounds_func,
          _run=_run, **testing_kwargs)
