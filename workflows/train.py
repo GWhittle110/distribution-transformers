@@ -155,13 +155,13 @@ def train(model: DistributionTransformer,
             
             if print_marginals:
                 state_size = int((phi_out.shape[-1])**0.5)
-                weigth = phi_out[:,:,0]
+                weight = phi_out[:,:,0]
                 loc = phi_out[..., 1:state_size+1]
                 scale = phi_out[..., -state_size ** 2:].reshape(*phi_out.shape[:-1], state_size, state_size)
                 var = torch.diagonal(scale, dim1=-2, dim2=-1)
                 
                 for var_ix in range(var.shape[-1]):
-                    marginal_phi_out = torch.stack([weigth, loc[:,:,var_ix], var[:,:,var_ix]], dim=-1)
+                    marginal_phi_out = torch.stack([weight, loc[:,:,var_ix], var[:,:,var_ix]], dim=-1)
                     marginal_posterior_losses = -GaussianMixtureModel(**decode_gmm_sample(marginal_phi_out, scale_parametrisation)
                                                      ).log_prob(model.sample_space_transform(targets)[:, [var_ix]])
                     marginal_posterior_loss = torch.nanmean(marginal_posterior_losses)

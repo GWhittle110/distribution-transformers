@@ -6,19 +6,20 @@ import torch
 from torch import Tensor
 from torch.func import vmap, jacrev
 
-from typing import Union
+from typing import Union, Literal
 import matplotlib.pyplot as plt
 
 from distributions.distributions import (InverseGammaMetaPrior, MappedScaleGaussianObservationModel,
                                          GaussianMixtureModel, CompleteDistribution)
 from distributions.utils import decode_gmm_sample
 from model.distribution_transformer import DistributionTransformer
+from competitor_methods.ace_dt_morphology import distribution_transformer_factory
 from workflows.train import train
 from workflows.test import test_conjugate_prior
 from model.embeddings import ComponentEmbedding, GammaEmbedding, ObservationEmbedding
 
 
-def run(n_components: Union[int, list[int]],
+def run(n_components: int,
         meta_prior_kwargs: dict,
         observation_loc: dict[str, list[float]],
         distribution_embedding_kwargs: dict,
@@ -27,6 +28,8 @@ def run(n_components: Union[int, list[int]],
         transformer_kwargs: dict,
         training_kwargs: dict,
         testing_kwargs: dict,
+        kind: Literal["DistributionTransformer", "DistributionTransformerWithEncoder",
+                  "SingleChannelDistributionTransformer", "LatentDecodedDistributionTransformer"] = "DistributionTransformer",
         _run=None,
         *args, **kwargs) -> None:
     """
@@ -43,11 +46,10 @@ def run(n_components: Union[int, list[int]],
         transformer_kwargs: Dictionary of parameters for the transformer model.
         training_kwargs: Dictionary of parameters for the training routine.
         testing_kwargs: Dictionary of parameters for the testing routine.
+        kind: Kind of distribution transformer to use.
         _run: Sacred run object.
 
     """
-    if not isinstance(n_components, list):
-        n_components = [n_components]
 
     meta_prior = InverseGammaMetaPrior(**meta_prior_kwargs)
 
@@ -60,21 +62,25 @@ def run(n_components: Union[int, list[int]],
 
     d_model = transformer_kwargs["d_model"]
 
-    models = []
-    for n in n_components:
-        prior_embedding = GammaEmbedding(d_model=d_model, n_components=n, **distribution_embedding_kwargs)
-        component_embedding = ComponentEmbedding(state_size=1, d_model=d_model, **component_embedding_kwargs)
-        observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size=1, **kwargs)
-                                 for key, kwargs in observation_embedding_kwargs.items()}
-        model = DistributionTransformer(component_embedding=component_embedding,
-                                        transformer_kwargs=transformer_kwargs,
-                                        n_components=n,
-                                        prior_embedding=prior_embedding,
-                                        sample_space_transform=torch.log,
-                                        **observation_embedding)
+    prior_embedding = GammaEmbedding(
+        d_model=d_model,
+        n_components=1 if kind in ["SingleChannelDistributionTransformer", "LatentDecodedDistributionTransformer"] else n_components,
+        **distribution_embedding_kwargs
+    )
 
-        model, _ = train(model, complete_distribution, _run=_run, **training_kwargs)
-        models.append(model)
+    model = distribution_transformer_factory(
+        kind=kind,
+        n_components=n_components,
+        state_size=1,
+        component_embedding_kwargs=component_embedding_kwargs,
+        observation_embedding_kwargs=observation_embedding_kwargs,
+        transformer_decoder_kwargs=transformer_kwargs,
+        transformer_encoder_kwargs=transformer_kwargs,
+        prior_embedding=prior_embedding,
+        sample_space_transform=torch.log
+    )
+
+    model, _ = train(model, complete_distribution, _run=_run, **training_kwargs)
 
     def conjugacy_update(phi: dict[str, Tensor],
                          z: dict[str, Tensor],
@@ -91,5 +97,5 @@ def run(n_components: Union[int, list[int]],
         rate = params["rate"].item()
         return 1e-6, 4 * rate / concentration + 1 / rate
 
-    test_conjugate_prior(models, n_components, complete_distribution, conjugacy_update, bounds_func=bounds_func,
+    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
                          inverse_transform=torch.exp, _run=_run, **testing_kwargs)

@@ -5,7 +5,6 @@ Transformer model architectures for each prior/posterior distribution parametris
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from torch.types import _size
 
 from typing import Union, Callable, Optional, TypedDict, NotRequired
 
