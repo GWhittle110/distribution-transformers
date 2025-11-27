@@ -88,7 +88,7 @@ def rmse(q: Distribution,
                                           samples[idx])
                           for idx in bootstrap_indices])
 
-    return rmses.mean().item(), 0.5 * (rmses.quantile(0.975) - rmses.quantile(0.025)).item()
+    return rmses.mean().item(), 1.96 * rmses.std().item() / sqrt(rmses.numel())
 
 
 def mmd(q: Distribution,
@@ -177,4 +177,4 @@ def mmd(q: Distribution,
             + (1 / n / (n - 1)) * (torch.sum(kyy, dim=[1,2]) - torch.sum(kyy.diagonal(0, -2, -1), dim=-1)))
     mmds = torch.clip(mmds, 0.)
 
-    return mmds.mean().item(), 0.5 * (mmds.quantile(0.975) - mmds.quantile(0.025)).item()
+    return mmds.mean().item(), 1.96 * mmds.std().item() / sqrt(mmds.numel())
