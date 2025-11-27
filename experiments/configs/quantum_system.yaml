@@ -1,6 +1,6 @@
 name: gmm_closed_form
 module_path: "static.quantum_system"
-seed: 0
+seed: 2
 
 n_components: 5
 
@@ -112,10 +112,10 @@ transformer_kwargs:
   activation: gelu
 
 training_kwargs:
-  warmup_epochs: 5
-  epochs: 20
+  warmup_epochs: 10
+  epochs: 50
   steps_per_epoch: 100
-  batch_size: 5000
+  batch_size: 2000
   lr: 0.001
   weight_decay: 0
   verbose: True
@@ -128,65 +128,65 @@ testing_kwargs:
   n_kl_samples: 1000
   plot: False
   competitor_kwargs:
-    ace:
-        transformer_kwargs:
-          d_model: 64
-          n_head: 8
-          dim_feedforward: 2048
-          dropout: 0
-          num_layers: 6
-          activation: gelu
-          dim_y: 1
-          dim_yc: 1
-          dim_xc: 2
-          num_components: 5
-          emb_depth: 5
-        training_kwargs:
-          warmup_epochs: 5
-          epochs: 20
-          steps_per_epoch: 100
-          batch_size: 5000
-          lr: 0.0001
-          weight_decay: 0
-          verbose: True
-          progress_bar: True
-          save_interval: -1
-          save_loss_series: False
-          randomise_target: False
-    vi:
-      lr: 0.01
-      lr_decay: 0.999
-      n_iters: 100
-      repeats: 100
-      n_samples: 10
-      ewma_gamma: 0.01
-      progress_bar: True
-    pfns:
-      transformer_kwargs:
-        d_model: 64
-        n_head: 8
-        dim_feedforward: 2048
-        dropout: 0
-        num_layers: 6
-        activation: gelu
-      n_buckets: 15
-      infinite_support: False
-      leftmost_border: 0.
-      rightmost_border: 1.
-      hidden_layer_sizes: [ 32 ]
-      activation: gelu
-      training_kwargs:
-        warmup_epochs: 5
-        epochs: 25
-        steps_per_epoch: 100
-        batch_size: 4000
-        lr: 0.0001
-        weight_decay: 0
-        verbose: True
-        progress_bar: True
-        save_interval: -1
-        save_loss_series: False
-      
+#    ace:
+#        transformer_kwargs:
+#          d_model: 64
+#          n_head: 8
+#          dim_feedforward: 2048
+#          dropout: 0
+#          num_layers: 6
+#          activation: gelu
+#          dim_y: 1
+#          dim_yc: 1
+#          dim_xc: 2
+#          num_components: 5
+#          emb_depth: 5
+#        training_kwargs:
+#          warmup_epochs: 10
+#          epochs: 50
+#          steps_per_epoch: 100
+#          batch_size: 2000
+#          lr: 0.0001
+#          weight_decay: 0
+#          verbose: True
+#          progress_bar: True
+#          save_interval: -1
+#          save_loss_series: False
+#          randomise_target: False
+#    vi:
+#      lr: 0.01
+#      lr_decay: 0.999
+#      n_iters: 100
+#      repeats: 100
+#      n_samples: 10
+#      ewma_gamma: 0.01
+#      progress_bar: True
+#    pfns:
+#      transformer_kwargs:
+#        d_model: 64
+#        n_head: 8
+#        dim_feedforward: 2048
+#        dropout: 0
+#        num_layers: 6
+#        activation: gelu
+#      n_buckets: 5000
+#      infinite_support: False
+#      leftmost_border: 0.
+#      rightmost_border: 1.
+#      hidden_layer_sizes: [ 32 ]
+#      activation: gelu
+#      training_kwargs:
+#        warmup_epochs: 10
+#        epochs: 50
+#        steps_per_epoch: 100
+#        batch_size: 2000
+#        lr: 0.0001
+#        weight_decay: 0
+#        verbose: True
+#        progress_bar: True
+#        save_interval: -1
+#        save_loss_series: False
+#
     tabpfn:
       n_training_samples: 10000
 

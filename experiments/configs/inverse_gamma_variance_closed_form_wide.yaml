@@ -1,6 +1,6 @@
 name: gmm_closed_form
 module_path: "static.inverse_gamma_variance_closed_form"
-seed: 0
+seed: 3
 
 n_components: 5
 
@@ -39,9 +39,11 @@ transformer_kwargs:
   num_layers: 6
   activation: gelu
 
+kind: DistributionTransformer
+
 training_kwargs:
-  warmup_epochs: 1
-  epochs: 1
+  warmup_epochs: 5
+  epochs: 20
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.005
@@ -57,27 +59,38 @@ testing_kwargs:
   n_kl_samples: 10000
   plot: False
   competitor_kwargs:
-    ace:
-      transformer_kwargs:
-        d_model: 128
-        n_head: 8
-        dim_feedforward: 256
-        dropout: 0
-        num_layers: 6
-        activation: gelu
-        dim_y: 1
-        dim_yc: 1
-        dim_xc: 2
-        num_components: 5
-        emb_depth: 3
-      training_kwargs:
-        warmup_epochs: 5
-        epochs: 20
-        steps_per_epoch: 100
-        batch_size: 5000
-        lr: 0.0001
-        weight_decay: 0
-        verbose: True
-        progress_bar: True
-        save_interval: -1
-        save_loss_series: False
+    vi:
+      lr: 0.1
+      lr_decay: 0.999
+      n_iters: 2000
+      n_samples: 10
+      ewma_gamma: 0.01
+      progress_bar: True
+      initial_loc_std: 0.1
+      initial_scale_tril_std: 0.1
+#    tabpfn:
+#      n_training_samples: 10000
+#    ace:
+#      transformer_kwargs:
+#        d_model: 64
+#        n_head: 8
+#        dim_feedforward: 256
+#        dropout: 0
+#        num_layers: 6
+#        activation: gelu
+#        dim_y: 1
+#        dim_yc: 1
+#        dim_xc: 2
+#        num_components: 5
+#        emb_depth: 3
+#      training_kwargs:
+#        warmup_epochs: 5
+#        epochs: 20
+#        steps_per_epoch: 100
+#        batch_size: 5000
+#        lr: 0.0005
+#        weight_decay: 0
+#        verbose: True
+#        progress_bar: True
+#        save_interval: -1
+#        save_loss_series: False

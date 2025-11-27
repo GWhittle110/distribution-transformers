@@ -40,7 +40,7 @@ class GaussianHead(nn.Module):
         out = self.predictor(z_target)
         mean, raw_std = torch.chunk(out, 2, dim=-1)
         std = (
-            self.std_min + F.softplus(raw_std) if self.bound_std else torch.exp(raw_std)
+            self.std_min +  torch.exp(raw_std) if self.bound_std else torch.exp(raw_std) # F.softplus(raw_std) if self.bound_std else torch.exp(raw_std)
         )
 
         pred_tar = Normal(mean, std)
@@ -214,12 +214,12 @@ class MixtureGaussian(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.bias_init:
             mean = raw_mean + self.mean_global_bias
-            std = F.softplus(raw_std + self.std_global_bias) + self.std_min
+            std = torch.exp(raw_std + self.std_global_bias) + self.std_min  # F.softplus(raw_std + self.std_global_bias) + self.std_min
             # std = torch.maximum(std, torch.tensor(0.1)) # needed for image
             weights = F.softmax(raw_weights + self.weights_global_bias, dim=-1)
         else:
             mean = raw_mean
-            std = F.softplus(raw_std) + self.std_min
+            std = torch.exp(raw_std) + self.std_min  #  F.softplus(raw_std) + self.std_min
             weights = F.softmax(raw_weights, dim=-1)
         return mean, std, weights
 
@@ -367,5 +367,5 @@ def sample(
 
 
 def inverse_softplus(y: torch.Tensor) -> torch.Tensor:
-    return torch.log(torch.special.expm1(y))
+    return torch.log(y)  # torch.log(torch.special.expm1(y))
 

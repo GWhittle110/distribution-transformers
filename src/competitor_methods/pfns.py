@@ -115,14 +115,14 @@ class RiemannDistribution(Distribution):
         device = self.borders.device
         bucket_dist = Categorical(probs=self.probs)
         max_bucket = self.probs.shape[-1] - 1
-        buckets = bucket_dist.sample(sample_shape).to(device)
+        buckets = bucket_dist.sample(sample_shape).to(device).unsqueeze(-1)
         borders = torch.hstack([(self.borders[..., 0:1] - 1e-6) * (1 - self.borders[..., 0:1].sign() * 1e-3)]
                                * self.left_infinite_support +
                                [self.borders] +
                                [(self.borders[..., -1:] + 1e-6) * (1 + self.borders[..., -1:].sign() * 1e-4)]
                                * self.right_infinite_support)
         uniform_sample = Uniform(borders.gather(-1, buckets.swapdims(0, -1)).swapdims(0, -1),
-                                 borders.gather(-1, buckets.swapdims(0, -1) + 1).swapdims(0, -1)).sample()
+                                 borders.gather(-1, buckets.swapdims(0, -1) + 1).swapdims(0, -1)).sample().squeeze(-1)
 
         left_normal_sample = -Normal(torch.zeros(self.batch_shape, device=self.left_variance.device),
                                      self.left_variance).sample(sample_shape).to(device).abs() \
@@ -132,8 +132,8 @@ class RiemannDistribution(Distribution):
             if self.right_infinite_support else torch.zeros(sample_shape + self.batch_shape, device=device)
 
         return (uniform_sample
-                + left_normal_sample * ((buckets == 0) * self.left_infinite_support)
-                + right_normal_sample * (buckets == max_bucket) * self.right_infinite_support)
+                + left_normal_sample * ((buckets.squeeze(-1) == 0) * self.left_infinite_support)
+                + right_normal_sample * (buckets.squeeze(-1) == max_bucket) * self.right_infinite_support)
 
     @property
     def mean(self) -> Tensor:

@@ -39,9 +39,11 @@ transformer_kwargs:
   num_layers: 6
   activation: gelu
 
+kind: DistributionTransformer
+
 training_kwargs:
   warmup_epochs: 1
-  epochs: 11
+  epochs: 20
   steps_per_epoch: 100
   batch_size: 5000
   lr: 0.005
@@ -50,6 +52,7 @@ training_kwargs:
   progress_bar: True
   save_interval: -1
   save_loss_series: False
+  use_prior_loss: False
 
 testing_kwargs:
   n_test_priors: 1000
@@ -65,29 +68,54 @@ testing_kwargs:
       progress_bar: True
       initial_loc_std: 0.1
       initial_scale_tril_std: 0.1
-    tabpfn:
-      n_training_samples: 10000
-    ace:
+    pfns:
       transformer_kwargs:
-        d_model: 128
+        d_model: 64
         n_head: 8
         dim_feedforward: 256
         dropout: 0
         num_layers: 6
         activation: gelu
-        dim_y: 1
-        dim_yc: 1
-        dim_xc: 2
-        num_components: 5
-        emb_depth: 3
+      n_buckets: 50000
+      infinite_support: [False, True]
+      leftmost_border: 0.
+      hidden_layer_sizes: [ 32 ]
+      activation: gelu
       training_kwargs:
         warmup_epochs: 5
         epochs: 20
         steps_per_epoch: 100
         batch_size: 5000
-        lr: 0.0005
+        lr: 0.001
         weight_decay: 0
+        max_grad: 10.
         verbose: True
         progress_bar: True
         save_interval: -1
         save_loss_series: False
+#    tabpfn:
+#      n_training_samples: 10000
+#    ace:
+#      transformer_kwargs:
+#        d_model: 64
+#        n_head: 8
+#        dim_feedforward: 256
+#        dropout: 0
+#        num_layers: 6
+#        activation: gelu
+#        dim_y: 1
+#        dim_yc: 1
+#        dim_xc: 2
+#        num_components: 5
+#        emb_depth: 3
+#      training_kwargs:
+#        warmup_epochs: 5
+#        epochs: 20
+#        steps_per_epoch: 100
+#        batch_size: 5000
+#        lr: 0.0005
+#        weight_decay: 0
+#        verbose: True
+#        progress_bar: True
+#        save_interval: -1
+#        save_loss_series: False

@@ -107,16 +107,17 @@ class LTIMotionModel(TimeInvariantMotionModel):
         state_size = state_transition_matrix.shape[-1]
         noise_size = process_noise_scale_tril.shape[-1]
 
-        super().__init__(state_size,
-                         lambda x, n: constant_vector
-                         + torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x)
-                         + torch.einsum("...ij, ...j -> ...i", process_noise_scale_tril, n),
-                         x0_distribution,
-                         MultivariateNormal(torch.zeros(noise_size), torch.eye(noise_size)))
 
         self.state_transition_matrix = state_transition_matrix
         self.process_noise_scale_tril = process_noise_scale_tril
         self.process_noise_covariance_matrix = process_noise_scale_tril @ process_noise_scale_tril.mT
         self.x0_distribution: MultivariateNormal = x0_distribution
         self.constant_vector = constant_vector if constant_vector is not None else torch.zeros(state_transition_matrix.shape[:-1])
+
+        super().__init__(state_size,
+                         lambda x, n: self.constant_vector
+                                      + torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x)
+                                      + torch.einsum("...ij, ...j -> ...i", process_noise_scale_tril, n),
+                         x0_distribution,
+                         MultivariateNormal(torch.zeros(noise_size), torch.eye(noise_size)))
 

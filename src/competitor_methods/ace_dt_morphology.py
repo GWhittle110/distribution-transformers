@@ -332,6 +332,63 @@ class LatentDecodedDistributionTransformer(SingleChannelDistributionTransformer)
         return phi_in, phi_out
 
 
+class SoftplusLatentDecodedDistributionTransformer(LatentDecodedDistributionTransformer):
+
+    def __init__(self,
+                 component_embedding: GMMEmbedding,
+                 transformer_decoder_kwargs: TransformerKwargs,
+                 transformer_encoder_kwargs: TransformerKwargs,
+                 prior_embedding: Optional[DistributionEmbedding] = None,
+                 sample_space_transform: Optional[Callable[[Tensor], Tensor]] = None,
+                 **observation_embeddings: ObservationEmbedding):
+        """
+        Conditional Transformer model for dealing with Gaussian mixture model priors and posteriors.
+        Treats the Gaussian mixture model as a permutation-invariant sequence of (weight, Gaussian density) pairs,
+        and conditions the output sequence on the encoded and self-attended sequence of observations using a transformer
+        decoder. Uses prior component encodings that respect the information geometry of the component densities.
+        Differs from regular Distribution Transformer by also processing observation embeddings with a transformer
+        encoder, and also by using a single channel in latent space to represent the prior/posterior, and treating the
+        prior as an observation and seeding the single readout channel with a fixed, learnable vector. Uses softplus
+        instead of exp to parametrise variances.
+
+        Args:
+            component_embedding: Embedding model from sequential GMM representation to model latent space.
+            transformer_kwargs: Kwargs for conditional transformer.
+            prior_embedding: Embedding model from prior parameter space to model latent space. If None, assumes
+                sequential representation GMM prior, and uses single-latent-token embedding.
+                Defaults to None.
+            sample_space_transform: Transform from sample space of prior to sample space of approximating GMM.
+                Defaults to Identity().
+            observation_embeddings: Dictionary of embedding models.
+        """
+        super().__init__(component_embedding, transformer_decoder_kwargs, transformer_encoder_kwargs, prior_embedding,
+                         sample_space_transform, **observation_embeddings)
+
+
+    def forward(self, phi: Tensor, **z: Tensor) -> tuple[Tensor, Tensor]:
+        """
+        Forward pass of conditional transformer model.
+
+        Args:
+            phi: Batched prior parameter tensor.
+            z: Dictionary of batched observation tensors. Must have keys with corresponding observation embeddings.
+
+        Returns:
+            Sequential GMM representation of approximate prior parameter tensor.
+            Sequential GMM representation of approximate posterior parameter tensor.
+
+        """
+        phi_in_provisional, phi_out_provisional = super().forward(phi, **z)
+
+        phi_in = torch.copy(phi_in_provisional)
+        phi_out = torch.copy(phi_out_provisional)
+
+        phi_in[..., 1 + self.state_size:] = F.softplus(torch.log(phi_in_provisional[..., 1 + self.state_size:])) + 1e-3
+        phi_out[..., 1 + self.state_size:] = F.softplus(torch.log(phi_out_provisional[..., 1 + self.state_size:])) + 1e-3
+
+        return phi_in, phi_out
+
+
 def distribution_transformer_factory(
     kind: Literal["DistributionTransformer", "DistributionTransformerWithEncoder",
                   "SingleChannelDistributionTransformer", "LatentDecodedDistributionTransformer"],
@@ -406,6 +463,18 @@ def distribution_transformer_factory(
             component_embedding = GMMEmbedding(state_size=state_size, n_components=n_components, d_model=d_model,
                                                **component_embedding_kwargs)
             model = LatentDecodedDistributionTransformer(
+                component_embedding=component_embedding,
+                transformer_decoder_kwargs=transformer_decoder_kwargs,
+                transformer_encoder_kwargs=transformer_encoder_kwargs if transformer_encoder_kwargs else transformer_decoder_kwargs,
+                prior_embedding=prior_embedding,
+                sample_space_transform=sample_space_transform,
+                **observation_embedding
+            )
+
+        case "SoftplusLatentDecodedDistributionTransformer":
+            component_embedding = GMMEmbedding(state_size=state_size, n_components=n_components, d_model=d_model,
+                                               **component_embedding_kwargs)
+            model = SoftplusLatentDecodedDistributionTransformer(
                 component_embedding=component_embedding,
                 transformer_decoder_kwargs=transformer_decoder_kwargs,
                 transformer_encoder_kwargs=transformer_encoder_kwargs if transformer_encoder_kwargs else transformer_decoder_kwargs,

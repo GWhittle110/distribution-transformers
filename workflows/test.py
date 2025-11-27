@@ -21,10 +21,12 @@ from distributions.utils import decode_gmm_sample, encode_gmm_sample, kl_diverge
 from competitor_methods.variational_inference import VI
 from competitor_methods.pfns import RiemannDistribution, PFN
 from competitor_methods.ekf import EKF
+from competitor_methods.particle_filter import ParticleFilter
 from competitor_methods.tabpfn import test_tabpfn
 from competitor_methods.ace import get_ace_model, predict_w_ace
 from workflows.train import train_pfn, train_ace
 from workflows.utils import get_model_size
+from workflows.metrics import *
 from dynamic.motion_models import LTIMotionModel
 from dynamic.filters import LTIFilter
 from dynamic.utils import plot_filtered_series
@@ -785,6 +787,7 @@ def test_quantum(model: DistributionTransformer,
         # Device
         phi = phi.to(device)
         z = {key: val.to(device) for key, val in z.items()}
+        z_tensor = torch.cat([zi for _, zi in z.items()], dim=-1)
         model = model.to(device)
 
         # Exact prior
@@ -800,20 +803,20 @@ def test_quantum(model: DistributionTransformer,
 
         prior_kl_divergence = kl_divergence(prior, model_prior, model.sample_space_transform,
                                             n_kl_samples)
-        model_expected_prior_kl_divergence = prior_kl_divergence.mean().item()
-        model_std_prior_kl_divergence = prior_kl_divergence.std().item()
+        model_prior_kl_divergence = prior_kl_divergence.mean().item()
+        model_prior_kl_divergence_conf = prior_kl_divergence.std().item() * 1.96 / sqrt(prior_kl_divergence.numel())
 
-        model_posterior_nll = -model_posterior.log_prob(model.sample_space_transform(x)
-                                                        .reshape(model_posterior.batch_shape
-                                                                 + model_posterior.event_shape).to(device))
-        model_posterior_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
-                                            (x.reshape(model_posterior.batch_shape
-                                                       + model_posterior.event_shape).to(device)
-                                             ).reshape(prior.batch_shape + model_posterior.event_shape
-                                                       + model_posterior.event_shape))
-        model_posterior_expected_nll = model_posterior_nll.mean().item()
-        model_posterior_std_nll = model_posterior_nll.std().item()
-        model_posterior_conf_nll = model_posterior_nll.std().item() * 1.96 / sqrt(n_test_priors)
+        model_posterior_nll, model_posterior_nll_conf = nll(model_posterior, x, model.sample_space_transform)
+        model_posterior_rmse, model_posterior_rmse_conf = rmse(model_posterior, x, inverse_transform)
+
+        def rbf_no_normalisation(x: Tensor) -> Tensor:
+            d = torch.cdist(x, x)
+            mask = ~torch.eye(d.shape[-1], dtype=torch.bool, device=x.device)
+            scale = d[0, mask].median() if d.dim() > 2 else d[mask].median()
+            return torch.exp(-0.5 * d ** 2 / scale ** 2)
+
+        model_posterior_mmd_prior, model_posterior_mmd_prior_conf = mmd(model_posterior, x, None, phi, inverse_transform, z_kernel=rbf_no_normalisation)
+        model_posterior_mmd_joint, model_posterior_mmd_joint_conf = mmd(model_posterior, x, z_tensor, phi, z_kernel=rbf_no_normalisation)
 
         model_size = get_model_size(model)
 
@@ -853,16 +856,15 @@ def test_quantum(model: DistributionTransformer,
                 vi_conf_nll_series.append(vi_conf_nll)
                 vi_time_series.append(vi_time)
 
+            vi_posterior_nll, vi_posterior_nll_conf = nll(vi.distribution(), x, model.sample_space_transform)
+            vi_posterior_rmse, vi_posterior_rmse_conf = rmse(vi.distribution(), x, inverse_transform)
+            vi_posterior_mmd_prior, vi_posterior_mmd_prior_conf = mmd(vi.distribution(), x, None, phi, inverse_transform, z_kernel=rbf_no_normalisation)
+            vi_posterior_mmd_joint, vi_posterior_mmd_joint_conf = mmd(vi.distribution(), x, z_tensor, phi, inverse_transform, z_kernel=rbf_no_normalisation)
+
             vi_time = sum(vi_time_series)
             vi_time_series = np.array(vi_time_series).cumsum()
 
-            vi_elbo = -vi.posterior_loss(z, n_samples=n_test_priors)
-            vi_expected_elbo = vi_elbo.mean().item()
-            vi_std_elbo = vi_elbo.std().item()
 
-            model_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=model_posterior)
-            model_expected_elbo = model_elbo.mean().item()
-            model_std_elbo = model_elbo.std().item()
 
         if "pfns" in competitor_kwargs:
             assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
@@ -880,18 +882,12 @@ def test_quantum(model: DistributionTransformer,
             pfn_inference_time = time() - start_time
             pfn_posterior = RiemannDistribution(phi_out, pfn.borders, pfn.infinite_support)
 
-            pfn_nll = -pfn_posterior.log_prob(x.reshape(pfn_posterior.batch_shape).to(device))
-            pfn_expected_nll = pfn_nll.mean().item()
-            pfn_std_nll = pfn_nll.std().item()
+            pfn_posterior_nll, pfn_posterior_nll_conf = nll(pfn_posterior, x)
+            pfn_posterior_rmse, pfn_posterior_rmse_conf = rmse(pfn_posterior, x)
+            pfn_posterior_mmd_prior, pfn_posterior_mmd_prior_conf = mmd(pfn_posterior, x, None, phi, z_kernel=rbf_no_normalisation)
+            pfn_posterior_mmd_joint, pfn_posterior_mmd_joint_conf = mmd(pfn_posterior, x, z_tensor, phi, z_kernel=rbf_no_normalisation)
 
             pfn_size = get_model_size(pfn)
-            pfn_conf_nll = pfn_nll.std().item() * 1.96 / sqrt(n_test_priors)
-
-            if "vi" in competitor_kwargs:
-                pfn_elbo = -vi.posterior_loss(z, n_samples=n_test_priors, distribution=pfn_posterior,
-                                              inverse_transform=Identity())
-                pfn_expected_elbo = pfn_elbo.mean().item()
-                pfn_std_elbo = pfn_elbo.std().item()
         
         if "tabpfn" in competitor_kwargs:
             assert torch.prod(torch.tensor(prior.event_shape)).item() == 1, \
@@ -901,7 +897,7 @@ def test_quantum(model: DistributionTransformer,
 
             start_time = time()
             
-            _, tabpfn_nll, tabpfn_regressor = test_tabpfn(
+            tabpfn_posterior, tabpfn_nll, tabpfn_regressor = test_tabpfn(
                 {key: val for key, val in phi_prior_dict.items()}, 
                 x, 
                 {key: val for key, val in z.items()},
@@ -912,10 +908,12 @@ def test_quantum(model: DistributionTransformer,
             tabpfn_inference_time = time() - start_time
             tabpfn_size = get_model_size(tabpfn_regressor.model_)
 
-            tabpfn_expected_nll = tabpfn_nll.mean().item()
-            tabpfn_conf_nll = tabpfn_nll.std().item() * 1.96 / sqrt(n_test_priors)
-            tabpfn_std_nll = tabpfn_nll.std().item()
-            
+            tabpfn_posterior_nll, tabpfn_posterior_nll_conf = nll(tabpfn_posterior, x)
+            tabpfn_posterior_rmse, tabpfn_posterior_rmse_conf = rmse(tabpfn_posterior, x)
+            tabpfn_posterior_mmd_prior, tabpfn_posterior_mmd_prior_conf = mmd(tabpfn_posterior, x, None, phi, z_kernel=rbf_no_normalisation)
+            tabpfn_posterior_mmd_joint, tabpfn_posterior_mmd_joint_conf = mmd(tabpfn_posterior, x, z_tensor, phi, z_kernel=rbf_no_normalisation)
+
+        """
         if "vi" in competitor_kwargs:
             # Plot loss timeseries
             plt.style.use(['seaborn-v0_8-paper'])
@@ -957,6 +955,7 @@ def test_quantum(model: DistributionTransformer,
             ax.set_xscale("log")
             fig.savefig(_run.observers[0].dir + "\\loss_series.pdf", format="pdf")
             plt.show()
+        """
         
         if "ace" in competitor_kwargs:
             # ACE solution
@@ -979,9 +978,11 @@ def test_quantum(model: DistributionTransformer,
             ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
             ace_inference_time = time() - start_time
 
-            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
-            ace_expected_nll = ace_nll.mean().item()
-            ace_std_nll = ace_nll.std().item()
+            ace_posterior_nll, ace_posterior_nll_conf = nll(ace_posterior, x, model.sample_space_transform)
+            ace_posterior_rmse, ace_posterior_rmse_conf = rmse(ace_posterior, x, inverse_transform)
+            ace_posterior_mmd_prior, ace_posterior_mmd_prior_conf = mmd(ace_posterior, x, None, phi, inverse_transform, z_kernel=rbf_no_normalisation, bootstrap_samples=100, bootstrap_downsampling=10)
+            ace_posterior_mmd_joint, ace_posterior_mmd_joint_conf = mmd(ace_posterior, x, z_tensor, phi,
+                                                                        inverse_transform, z_kernel=rbf_no_normalisation, bootstrap_samples=100, bootstrap_downsampling=10)
             
             ace_size = get_model_size(ace)
 
@@ -1005,48 +1006,69 @@ def test_quantum(model: DistributionTransformer,
 
         if _run is not None:
             _run.info.update({
-                "model_expected_prior_kl_divergence": model_expected_prior_kl_divergence,
-                "model_std_prior_kl_divergence": model_std_prior_kl_divergence,
+                "model_prior_kl_divergence": model_prior_kl_divergence,
+                "model_prior_kl_divergence_conf": model_prior_kl_divergence_conf,
                 "model_inference_time": model_inference_time,
                 "model_single_inference_time": model_single_inference_time,
-                "model_posterior_expected_nll": model_posterior_expected_nll,
-                "model_posterior_std_nll": model_posterior_std_nll,
+                "model_posterior_nll": model_posterior_nll,
+                "model_posterior_nll_conf": model_posterior_nll_conf,
+                "model_posterior_rmse": model_posterior_rmse,
+                "model_posterior_rmse_conf": model_posterior_rmse_conf,
+                "model_posterior_mmd_prior": model_posterior_mmd_prior,
+                "model_posterior_mmd_prior_conf": model_posterior_mmd_prior_conf,
+                "model_posterior_mmd_joint": model_posterior_mmd_joint,
+                "model_posterior_mmd_joint_conf": model_posterior_mmd_joint_conf,
                 "model_size": model_size,
             })
             if "vi" in competitor_kwargs:
                 _run.info.update({
                     "vi_time": vi_time,
-                    "model_expected_elbo": model_expected_elbo,
-                    "model_std_elbo": model_std_elbo,
-                    "vi_expected_elbo": vi_expected_elbo,
-                    "vi_std_elbo": vi_std_elbo,
-                    "vi_expected_nll": vi_expected_nll,
-                    "vi_std_nll": vi_std_nll
+                    "vi_posterior_nll": vi_posterior_nll,
+                    "vi_posterior_nll_conf": vi_posterior_nll_conf,
+                    "vi_posterior_rmse": vi_posterior_rmse,
+                    "vi_posterior_rmse_conf": vi_posterior_rmse_conf,
+                    "vi_posterior_mmd_prior": vi_posterior_mmd_prior,
+                    "vi_posterior_mmd_prior_conf": vi_posterior_mmd_prior_conf,
+                    "vi_posterior_mmd_joint": vi_posterior_mmd_joint,
+                    "vi_posterior_mmd_joint_conf": vi_posterior_mmd_joint_conf,
                 })
             if "pfns" in competitor_kwargs:
                 _run.info.update({
                     "pfn_inference_time": pfn_inference_time,
-                    "pfn_expected_nll": pfn_expected_nll,
-                    "pfn_std_nll": pfn_std_nll,
+                    "pfn_posterior_nll": pfn_posterior_nll,
+                    "pfn_posterior_nll_conf": pfn_posterior_nll_conf,
+                    "pfn_posterior_rmse": pfn_posterior_rmse,
+                    "pfn_posterior_rmse_conf": pfn_posterior_rmse_conf,
+                    "pfn_posterior_mmd_prior": pfn_posterior_mmd_prior,
+                    "pfn_posterior_mmd_prior_conf": pfn_posterior_mmd_prior_conf,
+                    "pfn_posterior_mmd_joint": pfn_posterior_mmd_joint,
+                    "pfn_posterior_mmd_joint_conf": pfn_posterior_mmd_joint_conf,
                     "pfn_size": pfn_size
                 })
-                if "vi" in competitor_kwargs:
-                    _run.info.update({
-                        "pfn_expected_elbo": pfn_expected_elbo,
-                        "pfn_std_elbo": pfn_std_elbo,
-                    })
             if "tabpfn" in competitor_kwargs:
                 _run.info.update({
                     "tabpfn_inference_time": tabpfn_inference_time,
-                    "tabpfn_expected_nll": tabpfn_expected_nll,
-                    "tabpfn_std_nll": tabpfn_std_nll,
+                    "tabpfn_posterior_nll": tabpfn_posterior_nll,
+                    "tabpfn_posterior_nll_conf": tabpfn_posterior_nll_conf,
+                    "tabpfn_posterior_rmse": tabpfn_posterior_rmse,
+                    "tabpfn_posterior_rmse_conf": tabpfn_posterior_rmse_conf,
+                    "tabpfn_posterior_mmd_prior": tabpfn_posterior_mmd_prior,
+                    "tabpfn_posterior_mmd_prior_conf": tabpfn_posterior_mmd_prior_conf,
+                    "tabpfn_posterior_mmd_joint": tabpfn_posterior_mmd_joint,
+                    "tabpfn_posterior_mmd_joint_conf": tabpfn_posterior_mmd_joint_conf,
                     "tabpfn_size": tabpfn_size
                 })
             if "ace" in competitor_kwargs:
                 _run.info.update({
                     "ace_inference_time": ace_inference_time,
-                    "ace_expected_nll": ace_expected_nll,
-                    "ace_std_nll": ace_std_nll,
+                    "ace_posterior_nll": ace_posterior_nll,
+                    "ace_posterior_nll_conf": ace_posterior_nll_conf,
+                    "ace_posterior_rmse": ace_posterior_rmse,
+                    "ace_posterior_rmse_conf": ace_posterior_rmse_conf,
+                    "ace_posterior_mmd_prior": ace_posterior_mmd_prior,
+                    "ace_posterior_mmd_prior_conf": ace_posterior_mmd_prior_conf,
+                    "ace_posterior_mmd_joint": ace_posterior_mmd_joint,
+                    "ace_posterior_mmd_joint_conf": ace_posterior_mmd_joint_conf,
                     "ace_size": ace_size
                 })
 
@@ -1185,28 +1207,51 @@ def test_lti_filter(model: DistributionTransformer,
             obs_model.condition_(series)
 
         observation_series = {key: obs_model.sample().to(device) for key, obs_model in observation_model.items()}
+        observation_series_tensor = torch.cat([z for _, z in observation_series.items()], dim=-1).cpu()
 
         # Model solution
         filter = LTIFilter(model, motion_model)
 
         start_time = time()
-        filtered_series_dict = filter.filter(observation_series, motion_model.x0_distribution)
-        model_inference_time = time() - start_time
+        filtered_series_dict, _ = filter.filter(observation_series, motion_model.x0_distribution)
+        model_density = GaussianMixtureModel(**filtered_series_dict)
+        model_inference_time = (time() - start_time) / series_length
 
-        model_nll = -GaussianMixtureModel(**filtered_series_dict).log_prob(series)
-        model_expected_nll = model_nll.mean().item()
-        model_std_nll = model_nll.std().item()
+        model_nll, model_nll_conf = nll(model_density, series)
+        model_rmse, model_rmse_conf = rmse(model_density, series)
+        model_mmd_prior, model_mmd_prior_conf = mmd(model_density, series, bootstrap_samples=100, bootstrap_downsampling=10)
+        model_mmd_joint, model_mmd_joint_conf = mmd(model_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
 
         if "ekf" in competitor_kwargs:
             ekf = EKF(model.state_size, motion_model, **observation_model)
 
             start_time = time()
-            ekf_filtered_series_dict = ekf.filter(observation_series, motion_model.x0_distribution)
-            ekf_inference_time = time() - start_time
+            ekf_filtered_series_dict, _ = ekf.filter(observation_series, motion_model.x0_distribution)
+            ekf_density = MultivariateNormal(**ekf_filtered_series_dict)
+            ekf_inference_time = (time() - start_time) / series_length
 
-            ekf_nll = -MultivariateNormal(**ekf_filtered_series_dict).log_prob(series)
-            ekf_expected_nll = ekf_nll.mean().item()
-            ekf_std_nll = ekf_nll.std().item()
+            ekf_nll, ekf_nll_conf = nll(ekf_density, series)
+            ekf_rmse, ekf_rmse_conf = rmse(ekf_density, series)
+            ekf_mmd_prior, ekf_mmd_prior_conf = mmd(ekf_density, series, bootstrap_samples=100,
+                                                        bootstrap_downsampling=10)
+            ekf_mmd_joint, ekf_mmd_joint_conf = mmd(ekf_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
+
+        if "particle_filter" in competitor_kwargs:
+            particle_filter = ParticleFilter(model.state_size, motion_model, **observation_model,
+                                             **competitor_kwargs["particle_filter"])
+
+            start_time = time()
+            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+            particle_filter_density = particle_filter.fit_density(particles)
+            particle_filter_inference_time = (time() - start_time) / series_length
+
+            particle_filter_nll, particle_filter_nll_conf = nll(particle_filter_density, series)
+            particle_filter_rmse, particle_filter_rmse_conf = rmse(particle_filter_density, series)
+            particle_filter_mmd_prior, particle_filter_mmd_prior_conf = mmd(particle_filter_density, series, bootstrap_samples=100,
+                                                        bootstrap_downsampling=10)
+            particle_filter_mmd_joint, particle_filter_mmd_joint_conf = mmd(particle_filter_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
+
+
 
         # Single problem run
 
@@ -1224,28 +1269,61 @@ def test_lti_filter(model: DistributionTransformer,
         filter = LTIFilter(model, motion_model)
 
         start_time = time()
-        filtered_series_dict = filter.filter(observation_series, motion_model.x0_distribution)
-        model_single_inference_time = time() - start_time
+        filtered_series_dict, _ = filter.filter(observation_series, motion_model.x0_distribution)
+        _ = GaussianMixtureModel(**filtered_series_dict)
+        model_single_inference_time = (time() - start_time) / series_length
 
         if "ekf" in competitor_kwargs:
             start_time = time()
-            ekf_filtered_series_dict = ekf.filter(observation_series, motion_model.x0_distribution)
-            ekf_single_inference_time = time() - start_time
+            ekf_filtered_series_dict, _ = ekf.filter(observation_series, motion_model.x0_distribution)
+            _ = MultivariateNormal(**ekf_filtered_series_dict)
+            ekf_single_inference_time = (time() - start_time) / series_length
+
+        if "particle_filter" in competitor_kwargs:
+            start_time = time()
+            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+            _ = particle_filter.fit_density(particles)
+            particle_filter_single_inference_time = (time() - start_time) / series_length
 
         if _run is not None:
             _run.info.update({
                 "model_inference_time": model_inference_time,
                 "model_single_inference_time": model_single_inference_time,
-                "model_expected_nll": model_expected_nll,
-                "model_std_nll": model_std_nll,
-                "model_size": model_size
+                "model_nll": model_nll,
+                "model_nll_conf": model_nll_conf,
+                "model_rmse": model_rmse,
+                "model_rmse_conf": model_rmse_conf,
+                "model_mmd_prior": model_mmd_prior,
+                "model_mmd_prior_conf": model_mmd_prior_conf,
+                "model_mmd_joint": model_mmd_joint,
+                "model_mmd_joint_conf": model_mmd_joint_conf,
+                "model_size": model_size,
             })
             if "ekf" in competitor_kwargs:
                 _run.info.update({
                     "ekf_inference_time": ekf_inference_time,
                     "ekf_single_inference_time": ekf_single_inference_time,
-                    "ekf_expected_nll": ekf_expected_nll,
-                    "ekf_std_nll": ekf_std_nll,
+                    "ekf_nll": ekf_nll,
+                    "ekf_nll_conf": ekf_nll_conf,
+                    "ekf_rmse": ekf_rmse,
+                    "ekf_rmse_conf": ekf_rmse_conf,
+                    "ekf_mmd_prior": ekf_mmd_prior,
+                    "ekf_mmd_prior_conf": ekf_mmd_prior_conf,
+                    "ekf_mmd_joint": ekf_mmd_joint,
+                    "ekf_mmd_joint_conf": ekf_mmd_joint_conf,
+                })
+            if "particle_filter" in competitor_kwargs:
+                _run.info.update({
+                    "particle_filter_inference_time": particle_filter_inference_time,
+                    "particle_filter_single_inference_time": particle_filter_single_inference_time,
+                    "particle_filter_nll": particle_filter_nll,
+                    "particle_filter_nll_conf": particle_filter_nll_conf,
+                    "particle_filter_rmse": particle_filter_rmse,
+                    "particle_filter_rmse_conf": particle_filter_rmse_conf,
+                    "particle_filter_mmd_prior": particle_filter_mmd_prior,
+                    "particle_filter_mmd_prior_conf": particle_filter_mmd_prior_conf,
+                    "particle_filter_mmd_joint": particle_filter_mmd_joint,
+                    "particle_filter_mmd_joint_conf": particle_filter_mmd_joint_conf,
                 })
 
         # Plotting first dimension of state space
@@ -1258,17 +1336,21 @@ def test_lti_filter(model: DistributionTransformer,
                 filtered_series_dict[scale_parametrisation].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
                     -1).unsqueeze(-1)
             filtered_series = encode_gmm_sample(filtered_series_dict, scale_parametrisation)
+            model_filter_distribution = GaussianMixtureModel(**filtered_series_dict)
 
+            """
             bounds = list(zip(*[gmm_bounds_func(decode_gmm_sample(dist, scale_parametrisation))
                                 for dist in filtered_series]))
             bounds = (max(bounds[0]), min(bounds[1]))
             bounds = (max(bounds[0], series.max().item() + 1), min(bounds[1], series.min().item() - 1))
+            """
 
-            filter_distribution = GaussianMixtureModel(**filtered_series_dict)
-            model_series_plot = plot_filtered_series(filter_distribution, series[..., dim].unsqueeze(-1), bounds,
+            bounds = None
+
+            model_series_plot = plot_filtered_series(model_filter_distribution, series[..., dim].unsqueeze(-1), bounds,
                                                      **plotting_kwargs)
 
-            if "ekf" in competitor_kwargs:
+            if "ekf" in competitor_kwargs and "particle_filter" in competitor_kwargs:
                 ekf_filtered_series_dict["loc"] = ekf_filtered_series_dict["loc"][..., dim].unsqueeze(-1)
                 ekf_filtered_series_dict["covariance_matrix"] = \
                     ekf_filtered_series_dict["covariance_matrix"].diagonal(dim1=-2, dim2=-1)[..., dim].unsqueeze(
@@ -1276,9 +1358,17 @@ def test_lti_filter(model: DistributionTransformer,
                 ekf_filter_distribution = MultivariateNormal(**ekf_filtered_series_dict)
                 ekf_series_plot = plot_filtered_series(ekf_filter_distribution, series[..., dim].unsqueeze(-1), bounds,
                                                        **plotting_kwargs)
+                combined_series_plot = plot_filtered_series([ekf_filter_distribution,
+                                                             model_filter_distribution],
+                                                            series[..., dim].unsqueeze(-1), bounds,
+                                                            cmaps=["OrRd", "BuPu"],
+                                                            legend_labels=["EKF Filter Density",
+                                                                           "Distribution Transformer Filter Density"],
+                                                            **plotting_kwargs)
 
             if _run is not None:
                 model_series_plot.savefig(_run.observers[0].dir + "\\model_series_plot.pdf", format="pdf")
 
                 if "ekf" in competitor_kwargs:
                     ekf_series_plot.savefig(_run.observers[0].dir + "\\ekf_series_plot.pdf", format="pdf")
+                    combined_series_plot.savefig(_run.observers[0].dir + "\\combined_series_plot.pdf", format="pdf")

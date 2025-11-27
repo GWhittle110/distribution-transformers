@@ -181,7 +181,7 @@ class VI(nn.Module):
         average_loss = 0
         optimizer = Adam(self.parameters(), lr=self.lr)
         scheduler = ExponentialLR(optimizer, self.lr_decay)
-        tqdm_iter = tqdm(range(n_iters), desc=f'VI Epoch {epoch+1}/{num_epochs}') if progress_bar else None
+        tqdm_iter = tqdm(range(n_iters), desc=f'VI Epoch {epoch}/{num_epochs}') if progress_bar else None
 
         for i in range(n_iters):
             tqdm_iter.update() if tqdm_iter is not None else None
