@@ -6,6 +6,7 @@ from copy import copy, deepcopy
 from functools import partial
 from random import sample
 from typing import Union, Sequence, Callable, Optional
+from competitor_methods.ace import get_ace_model, predict_w_ace
 import gpytorch
 import linear_operator
 from matplotlib import pyplot as plt
@@ -17,7 +18,7 @@ from sympy import comp, hyper
 import torch
 from torch import Tensor
 from torch import nn
-from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal, Independent
+from torch.distributions import Normal, MultivariateNormal, constraints, Distribution, Uniform, Normal, Independent, MixtureSameFamily
 from torch.distributions.utils import lazy_property
 from torch.types import _size
 from competitor_methods.pfns import RiemannDistribution, PFN, get_borders_from_prior
@@ -26,7 +27,7 @@ import tqdm
 
 from distributions.utils import decode_gmm_sample
 from pyro.infer import MCMC, NUTS
-from torch.distributions import InverseGamma
+from torch.distributions import InverseGamma, Categorical
 from torch.nn import Module as TModule
 from gpytorch.priors.prior import Prior
 from gpytorch.priors.utils import _bufferize_attributes
@@ -107,8 +108,8 @@ def test_tabfpfn(
             regressor.fit(X_train, Y_train)
             
             regressor_prediction = regressor.predict(X_test, output_type="full")
-            criterion = regressor_prediction['criterion']
-            logits = regressor_prediction['logits']
+            criterion = regressor_prediction['criterion'].cpu()
+            logits = regressor_prediction['logits'].cpu()
 
             rmse = ((criterion.mean(logits) - Y_test)**2).mean().sqrt()
 
@@ -390,9 +391,66 @@ def test_dt(
         if variable == "lengthscale":
             ls_samples = model_posterior.sample().exp()
 
-    get_analytical_ppd(ls_samples, x[:,0], phi_prior_dict, z)
+    get_analytical_ppd(ls_samples, x[:,0], phi_prior_dict, z, model_name="DT")
 
-def get_analytical_ppd(ls_samples, true_y, phi_prior_dict, z):
+
+def test_ace(
+    n_test_priors,
+    model,
+    meta_prior_kwargs,
+    observation_model,
+    sample_space_transform,
+    ):
+
+    device = "cuda:0" if next(model.parameters()).is_cuda else "cpu"
+    
+    meta_prior = MeanScaleMetaPrior(**meta_prior_kwargs)
+    complete_distribution = CompleteDistributionGPPredictive(meta_prior,  **observation_model)
+
+    phi, x, z = complete_distribution.sample((n_test_priors,))
+    
+    before_inference = time()
+    ace_posterior = predict_w_ace(phi.to(device), sample_space_transform(x).to(device), {k:v.to(device) for k,v in z.items()}, model.to(device))
+    after_inference = time() - before_inference
+    
+    phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+    prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+    
+    posterior_component = ace_posterior.component_distribution
+    posterior_mixture = ace_posterior.mixture_distribution
+    locs = posterior_component.loc
+    scales = posterior_component.scale
+    weights = posterior_mixture.probs
+    
+    ls_samples = None
+    
+    dists = [
+        MixtureSameFamily( Categorical(weights[:, i, :]), Normal(locs[:, i, :], scales[:, i, :]**0.5))   # shape: [10000, 5]
+        for i in range(locs.shape[1])
+    ]
+
+
+    for variable in ["y",  "lengthscale"]:
+        var_ix = 0 if variable=="y" else 1
+        model_posterior = dists[var_ix]
+        posterior_losses = -model_posterior.log_prob(sample_space_transform(x)[...,[var_ix]].squeeze(-1))
+
+        posterior_losses -= torch.logdet(vmap(jacrev(sample_space_transform))
+                                            (x.reshape(model_posterior.batch_shape
+                                                       + torch.Size([2])).to(device)
+                                             )[...,var_ix, var_ix].reshape(prior.batch_shape + torch.Size([1, 1])))
+
+        rmse = ((model_posterior.mean - sample_space_transform(x)[..., var_ix])**2).mean().sqrt()
+
+        print(f"{variable}: Testing ACE NNL {posterior_losses.mean().item()} +/- {1.96 * posterior_losses.std().item() / (model_posterior.batch_shape[0]) ** 0.5} Time taken: {after_inference} RMSE {rmse.item()}")
+
+        if variable == "lengthscale":
+            ls_samples = model_posterior.sample().exp()
+
+    get_analytical_ppd(ls_samples, x[:,0], phi_prior_dict, z, model_name="ACE")
+
+
+def get_analytical_ppd(ls_samples, true_y, phi_prior_dict, z, model_name="DT"):
     train_x = z["dataset"][:,:,0].unsqueeze(-1)
     train_y = z["dataset"][:,:,1]
     num_priors = true_y.shape[0]
@@ -410,8 +468,8 @@ def get_analytical_ppd(ls_samples, true_y, phi_prior_dict, z):
     analytical_ppd = gp_model(z["query"].unsqueeze(-1))
 
     analytical_posterior_losses = - analytical_ppd.log_prob(true_y.unsqueeze(-1))
-    
-    print(f"y PPD: Testing DT NNL {analytical_posterior_losses.mean().item()} +/- {1.96 * analytical_posterior_losses.std().item() / (analytical_posterior_losses.shape[0]) ** 0.5}")
+
+    print(f"y PPD: Testing {model_name} NNL {analytical_posterior_losses.mean().item()} +/- {1.96 * analytical_posterior_losses.std().item() / (analytical_posterior_losses.shape[0]) ** 0.5}")
 
 def get_marginal_posterior(
     phi_out,
@@ -459,37 +517,62 @@ def run(n_components: int,
         # Distribution transformer
         d_model = transformer_kwargs["d_model"]
         component_embedding = ComponentEmbedding(state_size=state_size, d_model=d_model, **component_embedding_kwargs)
-        observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size= (meta_prior_kwargs["x_dimensions"] + (1 if key=="dataset" else 0)), **kwargs)
-                                for key, kwargs in observation_embedding_kwargs.items()}
-        prior_embedding = HyperpriorEmbedding(d_model=d_model,n_components=n_components,state_size=state_size, **distribution_embedding_kwargs, **component_embedding_kwargs)
-        model = DistributionTransformer(component_embedding=component_embedding,
-                                        transformer_kwargs=transformer_kwargs,
-                                        n_components=n_components,
-                                        prior_embedding=prior_embedding,
-                                        sample_space_transform= lambda x: torch.stack([x[...,0], torch.log(x[...,1])], dim=-1),
-                                        **observation_embedding)
         
-        if kwargs.get("model_path", False):
-            model.load_state_dict(torch.load(kwargs.get("model_path"), weights_only=True))
-            print(f"DF model size {get_model_size(model)}")
-            test_dt(n_test_priors, model, meta_prior_kwargs, observation_model)
-        else:
-            model.load_state_dict(torch.load(kwargs.get("model_y_path"), weights_only=True))
-            test_dt_individual(n_test_priors, model, meta_prior_kwargs, observation_model, "y")
-            model.load_state_dict(torch.load(kwargs.get("model_ls_path"), weights_only=True))
-            test_dt_individual(n_test_priors, model, meta_prior_kwargs, observation_model, "ls")
+        if "model_path" in kwargs or ("model_y_path" in kwargs and "model_ls_path" in kwargs):
+            observation_embedding = {key: ObservationEmbedding(d_model=d_model, observation_size= (meta_prior_kwargs["x_dimensions"] + (1 if key=="dataset" else 0)), **kwargs)
+                                    for key, kwargs in observation_embedding_kwargs.items()}
+            prior_embedding = HyperpriorEmbedding(d_model=d_model,n_components=n_components,state_size=state_size, **distribution_embedding_kwargs, **component_embedding_kwargs)
+            model = DistributionTransformer(component_embedding=component_embedding,
+                                            transformer_kwargs=transformer_kwargs,
+                                            n_components=n_components,
+                                            prior_embedding=prior_embedding,
+                                            sample_space_transform= lambda x: torch.stack([x[...,0], torch.log(x[...,1])], dim=-1),
+                                            **observation_embedding)
+            
+            if kwargs.get("model_path", False):
+                model.load_state_dict(torch.load(kwargs.get("model_path"), weights_only=True))
+                print(f"DF model size {get_model_size(model)}")
+                test_dt(n_test_priors, model, meta_prior_kwargs, observation_model)
+            else:
+                model.load_state_dict(torch.load(kwargs.get("model_y_path"), weights_only=True))
+                test_dt_individual(n_test_priors, model, meta_prior_kwargs, observation_model, "y")
+                model.load_state_dict(torch.load(kwargs.get("model_ls_path"), weights_only=True))
+                test_dt_individual(n_test_priors, model, meta_prior_kwargs, observation_model, "ls")
         
-        pfn_y = PFN(**pfn_kwargs, **deepcopy(model.observation_embeddings))
-        pfn_y.load_state_dict(torch.load(kwargs.get("pfn_y_path"), weights_only=True))
-        print(f"pfn_y model size {get_model_size(pfn_y)}")
+        if "pfn_y_path" in kwargs and "pfn_ls_path" in kwargs:
+            pfn_y = PFN(**pfn_kwargs, **deepcopy(model.observation_embeddings))
+            pfn_y.load_state_dict(torch.load(kwargs.get("pfn_y_path"), weights_only=True))
+            print(f"pfn_y model size {get_model_size(pfn_y)}")
+            
+            # PFNs
+            pfn_ls = PFN(**pfn_kwargs, **deepcopy(model.observation_embeddings))
+            pfn_ls.load_state_dict(torch.load(kwargs.get("pfn_ls_path"), weights_only=True))
+            print(f"pfn_ls model size {get_model_size(pfn_ls)}")
+            
+            test_pfn(n_test_priors, model, meta_prior_kwargs, observation_model, pfn_y ,marginalise_lengthscale=True)
+            test_pfn(n_test_priors, model, meta_prior_kwargs, observation_model, pfn_ls ,marginalise_y=True)
         
-        # PFNs
-        pfn_ls = PFN(**pfn_kwargs, **deepcopy(model.observation_embeddings))
-        pfn_ls.load_state_dict(torch.load(kwargs.get("pfn_ls_path"), weights_only=True))
-        print(f"pfn_ls model size {get_model_size(pfn_ls)}")
-        
-        test_pfn(n_test_priors, model, meta_prior_kwargs, observation_model, pfn_y ,marginalise_lengthscale=True)
-        test_pfn(n_test_priors, model, meta_prior_kwargs, observation_model, pfn_ls ,marginalise_y=True)
+        if "ace_path" in kwargs:
+            meta_prior = MeanScaleMetaPrior(**meta_prior_kwargs)
+            complete_distribution = CompleteDistributionGPPredictive(meta_prior,  **observation_model)
+            phi, x, z = complete_distribution.sample((1,))
+            # Exact prior
+            phi_prior_dict = complete_distribution.meta_prior.decode_sample(phi)
+            prior = complete_distribution.meta_prior.prior(**phi_prior_dict)
+            size_of_x = torch.tensor(prior.event_shape).item() if torch.tensor(prior.event_shape).numel() > 0 else 1
+            size_of_phi = complete_distribution.meta_prior.prior_size 
+            size_of_z = sum(
+                torch.tensor(obs.event_shape).item() if torch.tensor(obs.event_shape).numel() > 0 else 1
+                for obs in complete_distribution.observation_model.values()
+            )
+            num_latent = size_of_x + size_of_phi + size_of_z
+
+            transformer_kwargs = competitor_kwargs["ace"]["transformer_kwargs"]
+
+            ace = get_ace_model(**transformer_kwargs, num_latent=num_latent)
+            ace.load_state_dict(torch.load(kwargs.get("ace_path")))
+            print(f"ACE model size {get_model_size(ace)}")
+            test_ace(n_test_priors, ace, meta_prior_kwargs, observation_model, sample_space_transform= lambda x: torch.stack([x[...,0], torch.log(x[...,1])], dim=-1),)
 
     test_tabfpfn(n_test_priors, meta_prior_kwargs, observation_model, testing_kwargs.get("tabpfn_trainsize"))
     test_mcmc(n_test_priors, model, meta_prior_kwargs, observation_model, device, competitor_kwargs, mcmc_samples=1000)

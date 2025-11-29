@@ -203,6 +203,7 @@ class MeanScaleMetaPrior(MetaPrior):
 
         self.prior_args_keylist = ["dataset_size_low", "dataset_size_high", "x_domain_size", "x_dimensions"]
         self.prior_args = dict()
+        self.prior_size = len(self.metapriors_keylist)
 
         for metaprior_param in self.prior_args_keylist:
             self.prior_args[metaprior_param] = kwargs.get(metaprior_param)

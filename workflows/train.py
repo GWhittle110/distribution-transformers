@@ -505,7 +505,8 @@ def train_ace(model: ACEBaseTransformer,
         if scheduler is None else scheduler(optimizer)
 
     posterior_loss_series = []
-    sampler = convert_complete_distribution_to_ace_sampler(complete_distribution, batch_size, sample_space_transform=sample_space_transform, randomise_target=randomise_target)
+    xc, yc = model.embedder.dim_xc, model.embedder.dim_yc
+    sampler = convert_complete_distribution_to_ace_sampler(complete_distribution, xc, yc, batch_size, sample_space_transform=sample_space_transform, randomise_target=randomise_target)
 
     def train_epoch() -> dict:
         model.train()

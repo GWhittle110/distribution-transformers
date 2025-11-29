@@ -232,7 +232,14 @@ def test_conjugate_prior(model: DistributionTransformer,
             ace_expected_kl_divergence = ace_posterior_kl_divergence.mean().item()
             ace_std_kl_divergence = ace_posterior_kl_divergence.std().item()
 
-            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_nll = -ace_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(ace_posterior.batch_shape
+                                                                 + ace_posterior.event_shape).to(device))
+            ace_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                                (x.reshape(ace_posterior.batch_shape
+                                                        + ace_posterior.event_shape).to(device)
+                                                ).reshape(prior.batch_shape + ace_posterior.event_shape
+                                                        + ace_posterior.event_shape))
             ace_expected_nll = ace_nll.mean().item()
             ace_std_nll = ace_nll.std().item()
             
@@ -574,7 +581,14 @@ def test(model: DistributionTransformer,
             ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
             ace_inference_time = time() - start_time
 
-            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_nll = -ace_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(ace_posterior.batch_shape
+                                                                 + ace_posterior.event_shape).to(device))
+            ace_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                                (x.reshape(ace_posterior.batch_shape
+                                                        + ace_posterior.event_shape).to(device)
+                                                ).reshape(prior.batch_shape + ace_posterior.event_shape
+                                                        + ace_posterior.event_shape))
             ace_expected_nll = ace_nll.mean().item()
             ace_std_nll = ace_nll.std().item()
             
@@ -915,48 +929,6 @@ def test_quantum(model: DistributionTransformer,
             tabpfn_expected_nll = tabpfn_nll.mean().item()
             tabpfn_conf_nll = tabpfn_nll.std().item() * 1.96 / sqrt(n_test_priors)
             tabpfn_std_nll = tabpfn_nll.std().item()
-            
-        if "vi" in competitor_kwargs:
-            # Plot loss timeseries
-            plt.style.use(['seaborn-v0_8-paper'])
-            fig, ax = plt.subplots()
-            legend_order = []
-            ax.plot(vi_time_series, vi_expected_nll_series,
-                    "-", color="tab:orange")
-            legend_order.append("SVI")
-            if "pfns" in competitor_kwargs:
-                ax.plot([pfn_inference_time, vi_time_series[-1]], [pfn_expected_nll] * 2,
-                        "--", color="tab:green")
-                legend_order.append("PFN")
-            if "tabpfn" in competitor_kwargs:
-                ax.plot([tabpfn_inference_time, vi_time_series[-1]], [tabpfn_expected_nll] * 2,
-                        "--", color="tab:red")
-                legend_order.append("TabPFNv2")
-            ax.plot([model_inference_time, vi_time_series[-1]], [model_posterior_expected_nll] * 2,
-                    "--", color="tab:blue")
-            ax.legend(legend_order + ["Distribution Transformer"])
-            ax.fill_between(vi_time_series, np.array(vi_expected_nll_series) + np.array(vi_conf_nll_series),
-                            np.array(vi_expected_nll_series) - np.array(vi_conf_nll_series),
-                            color="tab:orange", alpha=0.5)
-            if "pfns" in competitor_kwargs:
-                ax.fill_between([pfn_inference_time, vi_time_series[-1]],
-                                np.array([pfn_expected_nll] * 2) + np.array([pfn_conf_nll] * 2),
-                                np.array([pfn_expected_nll] * 2) - np.array([pfn_conf_nll] * 2),
-                                color="tab:green", alpha=0.5)
-            if "tabpfn" in competitor_kwargs:
-                ax.fill_between([tabpfn_inference_time, vi_time_series[-1]],
-                                np.array([tabpfn_expected_nll] * 2) + np.array([tabpfn_conf_nll] * 2),
-                                np.array([tabpfn_expected_nll] * 2) - np.array([tabpfn_conf_nll] * 2),
-                                color="tab:red", alpha=0.5)
-            ax.fill_between([model_inference_time, vi_time_series[-1]],
-                            np.array([model_posterior_expected_nll] * 2) + np.array([model_posterior_conf_nll] * 2),
-                            np.array([model_posterior_expected_nll] * 2) - np.array([model_posterior_conf_nll] * 2),
-                            color="tab:blue", alpha=0.5)
-            ax.set_xlabel(f"Inference Time per {n_test_priors} Problem Batch (s)")
-            ax.set_ylabel("Negative Log-Likelihood")
-            ax.set_xscale("log")
-            fig.savefig(_run.observers[0].dir + "\\loss_series.pdf", format="pdf")
-            plt.show()
         
         if "ace" in competitor_kwargs:
             # ACE solution
@@ -979,11 +951,72 @@ def test_quantum(model: DistributionTransformer,
             ace_posterior = predict_w_ace(phi.to(device), x.to(device), {k:v.to(device) for k,v in z.items()}, ace.to(device))
             ace_inference_time = time() - start_time
 
-            ace_nll = -ace_posterior.log_prob(x.reshape(ace_posterior.batch_shape + ace_posterior.event_shape).to(device))
+            ace_nll = -ace_posterior.log_prob(model.sample_space_transform(x)
+                                                        .reshape(ace_posterior.batch_shape
+                                                                 + ace_posterior.event_shape).to(device))
+            ace_nll -= torch.logdet(vmap(jacrev(model.sample_space_transform))
+                                                (x.reshape(ace_posterior.batch_shape
+                                                        + ace_posterior.event_shape).to(device)
+                                                ).reshape(prior.batch_shape + ace_posterior.event_shape
+                                                        + ace_posterior.event_shape))
             ace_expected_nll = ace_nll.mean().item()
+            ace_conf_nll = ace_nll.std().item() * 1.96 / sqrt(n_test_priors)
             ace_std_nll = ace_nll.std().item()
             
             ace_size = get_model_size(ace)
+            
+        if "vi" in competitor_kwargs:
+            # Plot loss timeseries
+            plt.style.use(['seaborn-v0_8-paper'])
+            fig, ax = plt.subplots()
+            legend_order = []
+            ax.plot(vi_time_series, vi_expected_nll_series,
+                    "-", color="tab:orange")
+            legend_order.append("SVI")
+            if "pfns" in competitor_kwargs:
+                ax.plot([pfn_inference_time, vi_time_series[-1]], [pfn_expected_nll] * 2,
+                        "--", color="tab:green")
+                legend_order.append("PFN")
+            if "tabpfn" in competitor_kwargs:
+                ax.plot([tabpfn_inference_time, vi_time_series[-1]], [tabpfn_expected_nll] * 2,
+                        "--", color="tab:red")
+                legend_order.append("TabPFNv2")
+            if "ace" in competitor_kwargs:
+                ax.plot([ace_inference_time, vi_time_series[-1]], [ace_expected_nll] * 2,
+                        "--", color="tab:purple")
+                legend_order.append("ACE")
+            ax.plot([model_inference_time, vi_time_series[-1]], [model_posterior_expected_nll] * 2,
+                    "--", color="tab:blue")
+            ax.legend(legend_order + ["Distribution Transformer"])
+            ax.fill_between(vi_time_series, np.array(vi_expected_nll_series) + np.array(vi_conf_nll_series),
+                            np.array(vi_expected_nll_series) - np.array(vi_conf_nll_series),
+                            color="tab:orange", alpha=0.5)
+            if "pfns" in competitor_kwargs:
+                ax.fill_between([pfn_inference_time, vi_time_series[-1]],
+                                np.array([pfn_expected_nll] * 2) + np.array([pfn_conf_nll] * 2),
+                                np.array([pfn_expected_nll] * 2) - np.array([pfn_conf_nll] * 2),
+                                color="tab:green", alpha=0.5)
+            if "tabpfn" in competitor_kwargs:
+                ax.fill_between([tabpfn_inference_time, vi_time_series[-1]],
+                                np.array([tabpfn_expected_nll] * 2) + np.array([tabpfn_conf_nll] * 2),
+                                np.array([tabpfn_expected_nll] * 2) - np.array([tabpfn_conf_nll] * 2),
+                                color="tab:red", alpha=0.5)
+            if "ace" in competitor_kwargs:
+                ax.fill_between([ace_inference_time, vi_time_series[-1]],
+                                np.array([ace_expected_nll] * 2) + np.array([ace_conf_nll] * 2),
+                                np.array([ace_expected_nll] * 2) - np.array([ace_conf_nll] * 2),
+                                color="tab:purple", alpha=0.5)
+            ax.fill_between([model_inference_time, vi_time_series[-1]],
+                            np.array([model_posterior_expected_nll] * 2) + np.array([model_posterior_conf_nll] * 2),
+                            np.array([model_posterior_expected_nll] * 2) - np.array([model_posterior_conf_nll] * 2),
+                            color="tab:blue", alpha=0.5)
+            ax.set_xlabel(f"Inference Time per {n_test_priors} Problem Batch (s)")
+            ax.set_ylabel("Negative Log-Likelihood")
+            ax.set_xscale("log")
+            fig.savefig(_run.observers[0].dir + "\\loss_series.pdf", format="pdf")
+            plt.show()
+        
+        
 
         # Single problem run
 

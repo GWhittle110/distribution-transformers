@@ -1,4 +1,5 @@
 # Taken from https://github.com/acerbilab/amortized-conditioning-engine/blob/main/src/model/embedder.py
+from functools import partial
 import torch
 import torch.nn as nn
 from .utils import positional_encoding_init, build_mlp, build_mlp_with_linear_skipcon
@@ -126,6 +127,7 @@ class EmbedderMarker(nn.Module):
         pos_emb_init: bool = False,
         use_skipcon_mlp: bool = False,
         discrete_index: Optional[List[int]] = None,
+        separate_embeddings: bool = False,
     ) -> None:
         """
         Initializes the EmbedderMarker class with specified parameters for embedding
@@ -148,19 +150,34 @@ class EmbedderMarker(nn.Module):
         if discrete_index:
             self.embedder_discrete = nn.Embedding(len(discrete_index), dim_out)
 
-        if use_skipcon_mlp:
-            self.embedderx = build_mlp_with_linear_skipcon(
-                dim_xc - 1, dim_hid, dim_out, emb_depth
-            )  # f_cov
-            self.embedderyc = build_mlp_with_linear_skipcon(
-                dim_yc, dim_hid, dim_out, emb_depth
-            )  # f_val
+        self.separate_embeddings = separate_embeddings
+        if separate_embeddings:
+            if use_skipcon_mlp:
+                mlp_function = partial(build_mlp_with_linear_skipcon, dim_in=dim_yc, depth=emb_depth, dim_hid=dim_hid, dim_out=dim_out)
+            else:
+                mlp_function = partial(build_mlp, dim_in=dim_yc, depth=emb_depth, dim_hid=dim_hid, dim_out=dim_out)
+
+            self.embedder_dict = nn.ModuleDict({
+                f"embedder_{i}": mlp_function() for i in range(num_latent)
+            })
+            
         else:
-            self.embedderx = build_mlp(dim_xc - 1, dim_hid, dim_out, emb_depth)  # f_cov
-            self.embedderyc = build_mlp(dim_yc, dim_hid, dim_out, emb_depth)  # f_val
+            if use_skipcon_mlp:
+                self.embedderx = build_mlp_with_linear_skipcon(
+                    dim_xc - 1, dim_hid, dim_out, emb_depth
+                )  # f_cov
+                self.embedderyc = build_mlp_with_linear_skipcon(
+                    dim_yc, dim_hid, dim_out, emb_depth
+                )  # f_val
+            else:
+                self.embedderx = build_mlp(dim_xc - 1, dim_hid, dim_out, emb_depth)  # f_cov
+                self.embedderyc = build_mlp(dim_yc, dim_hid, dim_out, emb_depth)  # f_val
 
         self.name = name
         self.discrete_index = discrete_index
+        
+        self.dim_yc = dim_yc
+        self.dim_xc = dim_xc
 
         # positional embedding initialization
         if pos_emb_init:
@@ -209,28 +226,37 @@ class EmbedderMarker(nn.Module):
 
         mask_context_x = (xce.int() == 1).float()
 
-        if self.discrete_index:
-            context_embedding = (
-                torch.add(
-                    self.embedderx(xc) * mask_context_x,  # Embedd for continuous x data
-                    self.embedderyc(yc)
-                    * inverse_mask_discrete,  # Embedd continuous y data
-                )
-                + self.embedder_discrete((yc * mask_discrete)[:, :, 0].int())
-                * mask_discrete
-            )  # Embedd discrete y data
-        else:
-            if xc.shape[-1] == 0:
-                context_embedding = self.embedderyc(yc)
-            else:
-                context_embedding = torch.add(
-                    self.embedderx(xc) * mask_context_x,
-                    self.embedderyc(yc),
-                )
+        if self.separate_embeddings:
+            assert mask_context_x.sum() == 0, "Cannot have data in context when using separate_embeddings"
+            embeddings = []
+            for i in range(yc.shape[1]):
+                assert xce[:, i, 0].int().unique().numel() == 1, "All markers in a given context point must be the same when using separate_embeddings"
+                embeddings.append(self.embedder_dict[f"embedder_{i}"](yc[:, i : i + 1, :]))
 
-        context_embedding = torch.add(
-            context_embedding, self.embedder_marker(xce[:, :, 0].int())
-        )  # Embedd for markers [1,2,3,...]
+            context_embedding = torch.cat(embeddings, dim=1)
+        else:
+            if self.discrete_index:
+                context_embedding = (
+                    torch.add(
+                        self.embedderx(xc) * mask_context_x,  # Embedd for continuous x data
+                        self.embedderyc(yc)
+                        * inverse_mask_discrete,  # Embedd continuous y data
+                    )
+                    + self.embedder_discrete((yc * mask_discrete)[:, :, 0].int())
+                    * mask_discrete
+                )  # Embedd discrete y data
+            else:
+                if xc.shape[-1] == 0:
+                    context_embedding = self.embedderyc(yc)
+                else:
+                    context_embedding = torch.add(
+                        self.embedderx(xc) * mask_context_x,
+                        self.embedderyc(yc),
+                    )
+
+            context_embedding = torch.add(
+                context_embedding, self.embedder_marker(xce[:, :, 0].int())
+            )  # Embedd for markers [1,2,3,...]
 
         # add xt and marker_? embeddings
         # set embedderx output to zero when point in target set is latent
