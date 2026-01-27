@@ -17,6 +17,7 @@ dependencies = [
     "sacred",
     "pytest (>=8.4.2,<9.0.0)",
     "pyyaml (>=6.0.3,<7.0.0)",
+    "tabpfn"
 ]
 requires-python = ">=3.12.0"
 
@@ -27,10 +28,6 @@ dev = [
     "sacred",
     "pyyaml",
 ]
-
-
-[project.urls]
-Homepage = "https://github.com/GWhittle110/distribution-transformers"
 
 
 [tools.pytest.ini.options]
