@@ -633,7 +633,7 @@ class ObservationModel(Distribution):
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         device = value.device
-        return self.distribution.log_prob(value.cpu()).to(device)
+        return self.distribution.log_prob(value.to(self.mean.device)).to(device)
 
 
 class DirectGaussianObservationModel(ObservationModel):
@@ -1063,8 +1063,12 @@ class FactorStructureStochasticVolatility(ObservationModel):
 
     def condition_(self, x: Tensor):
         self.device = x.device
-        covariance_matrix = torch.einsum("...ij, ...j, ...kj -> ...ik", self.factor_loadings, torch.exp(x), self.factor_loadings) + self.residual_covariance
-        self.distribution = MultivariateNormal(self.mean_return, covariance_matrix)
+        covariance_matrix = (torch.einsum("...ij, ...j, ...kj -> ...ik",
+                                         self.factor_loadings.to(self.device), torch.exp(x),
+                                         self.factor_loadings.to(self.device))
+                             + self.residual_covariance.to(self.device))
+        scale_tril = torch.linalg.cholesky(covariance_matrix)
+        self.distribution = MultivariateNormal(self.mean_return.to(self.device), scale_tril=scale_tril)
 
 
 class RangefinderObservationModel(ObservationModel):

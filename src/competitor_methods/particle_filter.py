@@ -4,7 +4,7 @@ Extended Kalman filter competitor for filtering tasks
 
 import torch
 from torch import Tensor
-from torch.distributions import Distribution, Categorical
+from torch.distributions import Distribution, Categorical, MultivariateNormal
 from torch.func import vmap
 
 from time import time
@@ -114,13 +114,16 @@ class ParticleFilter(Filter):
         indexes = resampling_dist.sample((particles.shape[-2],)).movedim(0, -1)
         return torch.gather(particles, -2, indexes.unsqueeze(-1).expand(particles.shape))
 
-    def fit_density(self, particles: Tensor) -> GaussianMixtureModel:
+    def fit_density(self, particles: Tensor) -> MultivariateNormal:
         cov_func = lambda x: torch.cov(x).reshape(x.shape[0], x.shape[0])
         for _ in range(particles.dim()-2):
             cov_func = vmap(cov_func)
-        sigma = (cov_func(particles.mT).unsqueeze(-3).expand(*particles.shape, self.state_size)
-                 + 0.001 * torch.eye(self.state_size, device=particles.device))
-        return GaussianMixtureModel(weights=torch.ones(particles.shape[:-1], device=particles.device),
-                                    loc=particles,
-                                    covariance_matrix=sigma * 1.06 * self.n_particles ** -0.2)
+        # sigma = (cov_func(particles.mT).unsqueeze(-3).expand(*particles.shape, self.state_size)
+        #              + 0.001 * torch.eye(self.state_size, device=particles.device))
+        # scale_tril = torch.linalg.cholesky(sigma * 1.06 * self.n_particles ** -0.2)
+        # return GaussianMixtureModel(weights=torch.ones(particles.shape[:-1], device=particles.device),
+        #                             loc=particles,
+        #                             scale_tril=scale_tril)
+        scale_tril = torch.linalg.cholesky(cov_func(particles.mT) + 1e-3 * torch.eye(self.state_size, device=particles.device))
+        return MultivariateNormal(particles.mean(dim=-2), scale_tril=scale_tril)
 

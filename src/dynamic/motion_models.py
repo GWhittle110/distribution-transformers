@@ -116,7 +116,7 @@ class LTIMotionModel(TimeInvariantMotionModel):
 
         super().__init__(state_size,
                          lambda x, n: self.constant_vector
-                                      + torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x)
+                                      + torch.einsum("...ij, ...j -> ...i", state_transition_matrix, x - self.constant_vector)
                                       + torch.einsum("...ij, ...j -> ...i", process_noise_scale_tril, n),
                          x0_distribution,
                          MultivariateNormal(torch.zeros(noise_size), torch.eye(noise_size)))

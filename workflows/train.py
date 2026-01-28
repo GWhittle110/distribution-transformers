@@ -2,7 +2,6 @@
 Main training routine for distribution transformer models
 """
 from collections import defaultdict
-from email.policy import default
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LRScheduler
@@ -13,6 +12,7 @@ import time
 import itertools
 from typing import TypedDict, Optional, NotRequired
 from os import makedirs
+from pathlib import Path
 
 from model.distribution_transformer import DistributionTransformer
 from distributions.distributions import CompleteDistribution, GaussianMixtureModel
@@ -132,7 +132,19 @@ def train(model: DistributionTransformer,
         tqdm_iter = tqdm(range(steps_per_epoch), desc='Training Epoch') if progress_bar else None
 
         before_get_batch = time.time()
-        complete_data_sample = complete_distribution.sample((steps_per_epoch, batch_size))
+
+        successful_sample_flag = False
+        sample_attempts = 0
+        while not successful_sample_flag and sample_attempts < 10:
+            try:
+                complete_data_sample = complete_distribution.sample((steps_per_epoch, batch_size))
+                successful_sample_flag = True
+            except Exception as e:
+                if sample_attempts >= 10:
+                    raise e
+                else:
+                    sample_attempts += 1
+
         z = complete_data_sample[2]
         time_to_get_epoch = time.time() - before_get_batch
 
@@ -211,10 +223,10 @@ def train(model: DistributionTransformer,
             print("Invalid epoch encountered, skipping...")
             raise e
 
-        if save_interval is not None and save_interval != -1 and epoch % save_interval   == 0 and _run is not None:
-            path = _run.observers[0].dir+"\\state_dicts\\"
+        if save_interval is not None and save_interval != -1 and epoch % save_interval == 0 and _run is not None:
+            path = Path(_run.observers[0].dir) / Path("state_dicts")
             makedirs(path, exist_ok=True)
-            torch.save(model.state_dict(), path + f"model_state_dict_{epoch}.pt")
+            torch.save(model.state_dict(), path / Path(f"model_state_dict_{epoch}.pt"))
 
         prior_loss_series.append(epoch_metrics["epoch_prior_loss_series"])
         posterior_loss_series.append(epoch_metrics["epoch_posterior_loss_series"])
@@ -239,9 +251,9 @@ def train(model: DistributionTransformer,
         scheduler.step()
 
     if save_interval is not None and _run is not None:
-        path = _run.observers[0].dir + "\\state_dicts\\"
+        path = Path(_run.observers[0].dir) / Path("state_dicts")
         makedirs(path, exist_ok=True)
-        torch.save(model.state_dict(), _run.observers[0].dir + f"\\state_dicts\\model_state_dict.pt")
+        torch.save(model.state_dict(), path / Path("model_state_dict.pt"))
 
     if save_loss_series and _run is not None:
         _run.info["epoch_prior_loss_series"] = prior_loss_series

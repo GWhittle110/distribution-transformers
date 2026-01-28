@@ -6,7 +6,7 @@ import torch
 from torch.distributions import MultivariateNormal
 
 from typing import Optional
-import matplotlib.pyplot as plt
+from pathlib import Path
 
 from distributions.distributions import (GaussianMixtureModelConjugateMetaPrior, CompleteDistribution,
                                          FactorStructureStochasticVolatility)
@@ -64,10 +64,10 @@ def run(n_components: int,
 
 
     # Observation model
-    mean_return = torch.tensor(observation_model_kwargs["mean_return"], dtype=torch.float32)
-    factor_loadings = torch.tensor(observation_model_kwargs["factor_loadings"], dtype=torch.float32)
-    residual_covariance = torch.tensor(observation_model_kwargs["residual_covariance"], dtype=torch.float32)
-    n_observations = mean_return.shape[-1]
+    n_observations = observation_model_kwargs["obs_1"]["n_observations"]
+    mean_return = torch.zeros(n_observations, dtype=torch.float32)
+    factor_loadings = torch.randn(n_observations, state_size, dtype=torch.float32)
+    residual_covariance = observation_model_kwargs["obs_1"]["residual_variance"] * torch.eye(n_observations, dtype=torch.float32)
 
     observation_model = {
         "obs_1": FactorStructureStochasticVolatility(mean_return, factor_loadings, residual_covariance)
@@ -89,19 +89,19 @@ def run(n_components: int,
                                     **observation_embedding)
 
     if load_path is not None:
-        model.load_state_dict(torch.load('experiments\\runs\\factor_stochastic_volatility\\' + load_path, weights_only=True))
+        model.load_state_dict(torch.load(Path('experiments/runs/factor_stochastic_volatility/') / load_path, weights_only=True))
     else:
         model, _ = train(model, complete_distribution, _run=_run, **training_kwargs)
 
-    state_transition_matrix = torch.diag_embed(torch.tensor(motion_model_kwargs["delta"]))
-    process_noise_scale_cholesky = torch.diag_embed(torch.tensor(motion_model_kwargs["sigma"]))
-    constant_vector = torch.tensor(motion_model_kwargs["alpha"])
+    state_transition_matrix = torch.diag_embed(torch.tensor(motion_model_kwargs["delta"], dtype=torch.float32))
+    process_noise_scale_cholesky = torch.diag_embed(torch.tensor(motion_model_kwargs["sigma"], dtype=torch.float32))
+    constant_vector = torch.tensor(motion_model_kwargs["alpha"], dtype=torch.float32) * (1 - torch.tensor(motion_model_kwargs["delta"], dtype=torch.float32))
 
     motion_model = LTIMotionModel(state_transition_matrix,
                                   process_noise_scale_cholesky,
                                   MultivariateNormal(
-                                      torch.tensor(motion_model_kwargs["x0_loc"]),
-                                      torch.tensor(motion_model_kwargs["x0_covariance_matrix"])),
+                                      constant_vector,
+                                      torch.eye(len(constant_vector), dtype=torch.float32)),
                                   constant_vector)
 
     test_lti_filter(model, motion_model, observation_model, _run=_run, **testing_kwargs)

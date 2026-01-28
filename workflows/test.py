@@ -13,7 +13,7 @@ from torch.distributions import MultivariateNormal, Distribution
 from time import time
 from typing import Callable, Optional
 from copy import copy
-from math import sqrt
+from math import sqrt, ceil
 
 from model.distribution_transformer import DistributionTransformer
 from distributions.distributions import CompleteDistribution, GaussianMixtureModel, ObservationModel
@@ -1201,10 +1201,21 @@ def test_lti_filter(model: DistributionTransformer,
 
         model_size = get_model_size(model)
 
-        series = motion_model.sample((series_length, n_test_series))
+        successful_sample_flag = False
+        sample_attempts = 0
+        while not successful_sample_flag:
+            try:
+                series = motion_model.sample((series_length, n_test_series))
 
-        for obs_model in observation_model.values():
-            obs_model.condition_(series)
+                for obs_model in observation_model.values():
+                    obs_model.condition_(series)
+
+                successful_sample_flag = True
+            except Exception as e:
+                sample_attempts += 1
+                if sample_attempts >= 10:
+                    raise e
+
 
         observation_series = {key: obs_model.sample().to(device) for key, obs_model in observation_model.items()}
         observation_series_tensor = torch.cat([z for _, z in observation_series.items()], dim=-1).cpu()
@@ -1237,20 +1248,53 @@ def test_lti_filter(model: DistributionTransformer,
             ekf_mmd_joint, ekf_mmd_joint_conf = mmd(ekf_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
 
         if "particle_filter" in competitor_kwargs:
-            particle_filter = ParticleFilter(model.state_size, motion_model, **observation_model,
-                                             **competitor_kwargs["particle_filter"])
+            particle_filter_kwargs = copy(competitor_kwargs["particle_filter"])
+            if "chunk_size" in particle_filter_kwargs:
+                chunk_size = particle_filter_kwargs.pop("chunk_size")
+            else:
+                chunk_size = None
+            n_particles = particle_filter_kwargs.pop("n_particles")
 
-            start_time = time()
-            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
-            particle_filter_density = particle_filter.fit_density(particles)
-            particle_filter_inference_time = (time() - start_time) / series_length
+            if isinstance(n_particles, int):
+                n_particles = [n_particles]
 
-            particle_filter_nll, particle_filter_nll_conf = nll(particle_filter_density, series)
-            particle_filter_rmse, particle_filter_rmse_conf = rmse(particle_filter_density, series)
-            particle_filter_mmd_prior, particle_filter_mmd_prior_conf = mmd(particle_filter_density, series, bootstrap_samples=100,
-                                                        bootstrap_downsampling=10)
-            particle_filter_mmd_joint, particle_filter_mmd_joint_conf = mmd(particle_filter_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
+            pf_nlls = []
+            pf_nll_confs = []
+            pf_inference_times = []
 
+            for n in n_particles:
+                particle_filter_kwargs["n_particles"] = n
+                particle_filter = ParticleFilter(model.state_size, motion_model, **observation_model,
+                                                 **particle_filter_kwargs)
+
+                start_time = time()
+                if chunk_size is None:
+                    particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+                    particle_filter_density = particle_filter.fit_density(particles)
+                else:
+                    particle_filter_densities = []
+                    n_chunks = int(ceil(observation_series[list(observation_series.keys())[0]].shape[1] / chunk_size))
+                    for i in range(n_chunks):
+                        observation_series_chunk = {key: val[:, i::n_chunks] for key, val in observation_series.items()}
+                        particles, _ = particle_filter.filter(observation_series_chunk, motion_model.x0_distribution)
+                        particle_filter_densities.append(particle_filter.fit_density(particles))
+                    particle_filter_density = MultivariateNormal(
+                        loc=torch.concat([filter.loc for filter in particle_filter_densities], dim=0),
+                        scale_tril=torch.concat([filter.scale_tril for filter in particle_filter_densities], dim=0)
+                    )
+
+
+                particle_filter_inference_time = (time() - start_time) / series_length
+
+                particle_filter_nll, particle_filter_nll_conf = nll(particle_filter_density, series)
+                particle_filter_rmse, particle_filter_rmse_conf = rmse(particle_filter_density, series)
+                particle_filter_mmd_prior, particle_filter_mmd_prior_conf = mmd(particle_filter_density, series, bootstrap_samples=100,
+                                                            bootstrap_downsampling=10)
+                particle_filter_mmd_joint, particle_filter_mmd_joint_conf = mmd(particle_filter_density, series, observation_series_tensor, bootstrap_samples=100, bootstrap_downsampling=10)
+
+                pf_nlls.append(particle_filter_nll)
+                pf_nll_confs.append(particle_filter_nll_conf)
+                pf_inference_times.append(particle_filter_inference_time)
 
 
         # Single problem run
@@ -1280,10 +1324,18 @@ def test_lti_filter(model: DistributionTransformer,
             ekf_single_inference_time = (time() - start_time) / series_length
 
         if "particle_filter" in competitor_kwargs:
-            start_time = time()
-            particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
-            _ = particle_filter.fit_density(particles)
-            particle_filter_single_inference_time = (time() - start_time) / series_length
+
+            pf_single_inference_times = []
+
+            for n in n_particles:
+                particle_filter_kwargs["n_particles"] = n
+                particle_filter = ParticleFilter(model.state_size, motion_model, **observation_model,
+                                                 **particle_filter_kwargs)
+                start_time = time()
+                particles, _ = particle_filter.filter(observation_series, motion_model.x0_distribution)
+                _ = particle_filter.fit_density(particles)
+                particle_filter_single_inference_time = (time() - start_time) / series_length
+                pf_single_inference_times.append(particle_filter_single_inference_time)
 
         if _run is not None:
             _run.info.update({
@@ -1324,6 +1376,10 @@ def test_lti_filter(model: DistributionTransformer,
                     "particle_filter_mmd_prior_conf": particle_filter_mmd_prior_conf,
                     "particle_filter_mmd_joint": particle_filter_mmd_joint,
                     "particle_filter_mmd_joint_conf": particle_filter_mmd_joint_conf,
+                    "particle_filter_nll_series": pf_nlls,
+                    "particle_filter_nll_conf_series": pf_nll_confs,
+                    "particle_filter_inference_time_series": pf_inference_times,
+                    "particle_filter_single_inference_time_series": pf_single_inference_times,
                 })
 
         # Plotting first dimension of state space
