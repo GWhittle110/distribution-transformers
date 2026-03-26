@@ -15,6 +15,7 @@ from model.distribution_transformer import DistributionTransformer
 from workflows.train import train
 from workflows.test import test_lti_filter
 from dynamic.motion_models import LTIMotionModel
+from pathlib import Path
 
 
 def run(n_components: int,
@@ -104,7 +105,7 @@ def run(n_components: int,
                                     **observation_embedding)
 
     if load_path is not None:
-        model.load_state_dict(torch.load('experiments\\runs\\lti_filter\\' + load_path, weights_only=True))
+        model.load_state_dict(torch.load(Path('experiments/runs/lti_filter/') / load_path, weights_only=True))
     else:
         model, _ = train(model, complete_distribution, _run=_run, **training_kwargs)
 

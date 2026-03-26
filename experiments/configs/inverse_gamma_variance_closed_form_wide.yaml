@@ -52,12 +52,17 @@ training_kwargs:
   progress_bar: True
   save_interval: -1
   save_loss_series: False
-  use_prior_loss: False
+  use_prior_loss: True
 
 testing_kwargs:
   n_test_priors: 1000
   n_kl_samples: 10000
   plot: False
+  test_meta_prior_kwargs:
+    concentration_concentration: 4
+    concentration_rate: 24
+    rate_concentration: 4
+    rate_rate: 24
   competitor_kwargs:
     vi:
       lr: 0.1
@@ -70,27 +75,27 @@ testing_kwargs:
       initial_scale_tril_std: 0.1
 #    tabpfn:
 #      n_training_samples: 10000
-#    ace:
-#      transformer_kwargs:
-#        d_model: 64
-#        n_head: 8
-#        dim_feedforward: 256
-#        dropout: 0
-#        num_layers: 6
-#        activation: gelu
-#        dim_y: 1
-#        dim_yc: 1
-#        dim_xc: 2
-#        num_components: 5
-#        emb_depth: 3
-#      training_kwargs:
-#        warmup_epochs: 5
-#        epochs: 20
-#        steps_per_epoch: 100
-#        batch_size: 5000
-#        lr: 0.0005
-#        weight_decay: 0
-#        verbose: True
-#        progress_bar: True
-#        save_interval: -1
-#        save_loss_series: False
+    ace:
+      transformer_kwargs:
+        d_model: 64
+        n_head: 8
+        dim_feedforward: 256
+        dropout: 0
+        num_layers: 6
+        activation: gelu
+        dim_y: 1
+        dim_yc: 1
+        dim_xc: 2
+        num_components: 5
+        emb_depth: 3
+      training_kwargs:
+        warmup_epochs: 5
+        epochs: 20
+        steps_per_epoch: 100
+        batch_size: 5000
+        lr: 0.0005
+        weight_decay: 0
+        verbose: True
+        progress_bar: True
+        save_interval: -1
+        save_loss_series: False

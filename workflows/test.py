@@ -47,7 +47,9 @@ def test_conjugate_prior(model: DistributionTransformer,
                          plot: bool = False,
                          bounds_func: Optional[Callable[[dict[str, Tensor]], tuple[float, float]]] = None,
                          gpu_device: str = "cuda:0",
-                         _run=None
+                         _run=None,
+                         *args,
+                         **kwargs
                          ) -> None:
     """
     Standard testing routine for experiments involving conjugate priors

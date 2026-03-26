@@ -35,4 +35,6 @@ def get_openai_lr(model: Module):
 def get_model_size(model: Module):
     param_size = sum(param.nelement() * param.element_size() for param in model.parameters())
     buffer_size = sum(buffer.nelement() * buffer.element_size() for buffer in model.buffers())
-    return (param_size + buffer_size) / 1024 ** 2   # Return size in MB
+    param_counts = sum(param.nelement() for param in model.parameters())
+    buffer_counts = sum(buffer.nelement() for buffer in model.buffers())
+    return (param_size + buffer_size) / 1024 ** 2, param_counts + buffer_counts   # Return size in MB

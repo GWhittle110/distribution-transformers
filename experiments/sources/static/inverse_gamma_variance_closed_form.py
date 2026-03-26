@@ -97,5 +97,10 @@ def run(n_components: int,
         rate = params["rate"].item()
         return 1e-6, 4 * rate / concentration + 1 / rate
 
-    test_conjugate_prior(model, complete_distribution, conjugacy_update, bounds_func=bounds_func,
+    if "test_meta_prior_kwargs" in testing_kwargs:
+        test_meta_prior = InverseGammaMetaPrior(**testing_kwargs["test_meta_prior_kwargs"])
+        complete_distribution = CompleteDistribution(test_meta_prior, **observation_model)
+
+    test_conjugate_prior(model, complete_distribution, conjugacy_update,
+                         bounds_func=bounds_func,
                          inverse_transform=torch.exp, _run=_run, **testing_kwargs)
